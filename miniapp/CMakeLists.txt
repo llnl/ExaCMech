@@ -12,7 +12,7 @@ endif()
 
 if (${BLT_VERSION} VERSION_GREATER_EQUAL 0.6.0)
     if(ENABLE_CUDA)
-        list(APPEND ECMECH_DEPENDS blt::cuda_runtime blt::cuda) 
+        list(APPEND ECMECH_MINIAPP_DEPENDS blt::cuda_runtime blt::cuda)
     endif()
     if(ENABLE_OPENMP)
         list(APPEND ECMECH_MINIAPP_DEPENDS blt::openmp) 

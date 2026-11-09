@@ -84,11 +84,11 @@ public:
      * @param num_items Number of `T` elements this slice should contain.
      * @param strat Execution strategy the returned pointer will be used under; only
      * meaningful in the CHAI-backed (`SNLS_RAJA_PORT_SUITE`) build, where it selects
-     * which execution space's copy of the data is returned (host build ignores it, hence
-     * `UNUSED_GPU`).
+     * which execution space's copy of the data is returned (the host-only build ignores
+     * it).
      * @return Pointer to the start of the newly carved slice.
      */
-    T* getNew(const size_t num_items, const ecmech::ExecutionStrategy UNUSED_GPU(strat)) {
+    T* getNew(const size_t num_items, const ecmech::ExecutionStrategy strat) {
         assert((num_items + offset) <= total_items && "Requested too large of an allocation");
         const size_t old_offset = offset;
         offset += num_items;
@@ -108,6 +108,7 @@ public:
         }
         return &(buffer.data(ses)[old_offset]);
 #else
+        (void) strat;
         return &(buffer[old_offset]);
 #endif
     }
