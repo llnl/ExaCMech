@@ -233,7 +233,9 @@ namespace ecmech {
             double tkelv,
             int outputLevel = 0)
    {
-      double evolVals[Kinetics::nEvolVals];
+      // Zero-initialized: getEvolVals implementations accumulate into
+      // entries of this array (e.g. the total slip rate in the last slot).
+      double evolVals[Kinetics::nEvolVals] = {};
       kinetics->getEvolVals(evolVals, gdot);
 
       Kinetics_H1Problem<Kinetics> prob(kinetics, hs_o, dt, evolVals, tkelv);
@@ -452,7 +454,9 @@ namespace ecmech {
             double tkelv,
             int outputLevel = 0)
    {
-      double evolVals[Kinetics::nEvolVals];
+      // Zero-initialized: getEvolVals implementations accumulate into
+      // entries of this array (e.g. the total slip rate in the last slot).
+      double evolVals[Kinetics::nEvolVals] = {};
       kinetics->getEvolVals(evolVals, gdot);
 
       Kinetics_HNProblem<Kinetics> prob(kinetics, hs_o, dt, evolVals, hvals, tkelv);
