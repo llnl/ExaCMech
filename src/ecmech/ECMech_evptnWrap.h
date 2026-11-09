@@ -34,6 +34,7 @@
 
 #if defined(__ecmech_host_only__)
 #include <sstream>
+#include <cstdlib>
 #endif
 
 #include "ECMech_matModelBase.h"
@@ -645,6 +646,25 @@ namespace ecmech {
                const auto tolerance = m_tolerance;
                const auto outputLevel = m_outputLevel;
 
+#if defined(ECMECH_SNLS_TEAM) && defined(__ecmech_gpu_active__)
+               if (m_accel == ECM_EXEC_STRAT_GPU) {
+                  bool ran = true;
+                  switch (snlsTeamSize()) {
+                     case 1: getResponseTeam<1>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     case 2: getResponseTeam<2>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     case 4: getResponseTeam<4>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     case 8: getResponseTeam<8>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     default: ran = false; break;
+                  }
+                  if (ran) {
+                     if (this->reduceStatus(histV, nPassed)) {
+                        getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
+                                         cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+                     }
+                     return;
+                  }
+               }
+#endif
                snls::forall<ECMECH_GPU_THREADS>(0, nPassed, [=]
                   __ecmech_hdev__
                   (int i)
@@ -689,6 +709,97 @@ namespace ecmech {
                                    cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
                }
             }// End of getResponse
+
+#if defined(ECMECH_SNLS_TEAM) && defined(__ecmech_gpu_active__)
+            /// Team size for the experimental SNLS team path on the GPU, read
+            /// once from the ECMECH_SNLS_TEAM environment variable: 1, 2, 4
+            /// or 8 threads per point; anything else (or unset) keeps the
+            /// one-thread-per-point path.
+            __ecmech_host__
+            static int snlsTeamSize()
+            {
+               static const int nt = [] {
+                  const char* env = std::getenv("ECMECH_SNLS_TEAM");
+                  return env ? std::atoi(env) : 0;
+               }();
+               return nt;
+            }
+
+            /// getResponse with NT threads per point (snls::forall_team +
+            /// SNLSTrDlDenseG::solveTeam). ECMECH_TEAM_PTS_PER_BLOCK points
+            /// share a block, so the block has ECMECH_TEAM_PTS_PER_BLOCK*NT
+            /// threads and that many TeamSlots of shared memory.
+            template<int NT>
+            __ecmech_host__
+            void getResponseTeam(const double & dt,
+                                 const double * def_rate_d6vV,
+                                 const double * spin_vecV,
+                                 const double * rel_vol_ratiosV,
+                                 double * internal_energyV,
+                                 double * cauchy_stress_d6pV,
+                                 double * histV,
+                                 double * tkelvV,
+                                 double * sddV,
+                                 double * mtanSDV,
+                                 const int& nPassed) const
+            {
+               const unsigned int def_rate_stride = m_strides[istride_def_rate];
+               const unsigned int spin_v_stride = m_strides[istride_spin_v];
+               const unsigned int vol_ratio_stride = m_strides[istride_vol_ratio];
+               const unsigned int int_eng_stride = m_strides[istride_int_eng];
+               const unsigned int stress_stride = m_strides[istride_stress];
+               const unsigned int history_stride = m_strides[istride_history];
+               const unsigned int tkelv_stride = m_strides[istride_tkelv];
+               const unsigned int sdd_stride = m_strides[istride_sdd];
+
+               const auto slipGeom = m_slipGeom;
+               const auto kinetics = m_kinetics;
+               const auto elastN = m_elastN;
+               const auto eosModel = m_eosModel;
+               const auto tolerance = m_tolerance;
+               const auto outputLevel = m_outputLevel;
+
+               using Slots = evptn::TeamSlots<SlipGeom, Kinetics, ThermoElastN, EosModel>;
+               constexpr int BLOCK = ECMECH_TEAM_PTS_PER_BLOCK * NT;
+               constexpr int IPB = snls::ForallTeamPacking<BLOCK, NT>::itemsPerBlock;
+
+               snls::forall_team<BLOCK, NT>(0, nPassed, [=]
+                  __ecmech_hdev__
+                  (int i, int tid, int nthreads, int teamBase, snls::TeamConsensus& consensus)
+               {
+                  RAJA_TEAM_SHARED Slots slots[IPB];
+                  double *mtanSDThis = (mtanSDV ? &mtanSDV[ecmech::nsvec2 * i] : nullptr);
+                  auto get_response = [&] (const SlipGeom& slip_geom) -> bool {
+                     return evptn::getResponseSnglTeam<SlipGeom, Kinetics, ThermoElastN, EosModel>
+                     (tid, nthreads, teamBase, consensus, slots[teamBase],
+                        slip_geom, *kinetics, *elastN, *eosModel,
+                        dt,
+                        tolerance,
+                        &def_rate_d6vV[def_rate_stride * i],
+                        &spin_vecV[spin_v_stride * i],
+                        &rel_vol_ratiosV[vol_ratio_stride * i],
+                        &internal_energyV[int_eng_stride * i],
+                        &cauchy_stress_d6pV[stress_stride * i],
+                        &histV[history_stride * i],
+                        tkelvV[tkelv_stride * i],
+                        &sddV[sdd_stride * i],
+                        mtanSDThis,
+                        outputLevel);
+                  };
+                  bool status;
+                  auto slipGeom_tmp = slipGeom;
+                  if constexpr (SlipGeom::dynamic) {
+                     SlipGeom slip_geom = *slipGeom_tmp;
+                     status = get_response(slip_geom);
+                  } else {
+                     status = get_response(*slipGeom_tmp);
+                  }
+                  if (!status && tid == 0) {
+                     histV[history_stride * i + iHistA_nFEval] *= -1;
+                  }
+               });
+            }
+#endif
 
             /**
              * @brief Retry constitutive response for failed material points using backup solver.

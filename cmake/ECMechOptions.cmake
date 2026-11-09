@@ -13,6 +13,7 @@ option(ENABLE_THROW "Enable throwing of exceptions" ON)
 
 option(USE_DPEFF "Output effective D^p rather than effective shearing rates" ON)
 option(ENABLE_EXTRA_SOLVERS "Enable extra solvers to be used if original solve fails" ON)
+option(ENABLE_SNLS_TEAM "Experimental: GPU getResponse with several threads per point (SNLS forall_team/solveTeam); needs an SNLS with team support" OFF)
 
 option(ENABLE_MINIAPPS "Enable miniapps" OFF)
 option(ENABLE_PYTHON "Enable building of python bindings" OFF)

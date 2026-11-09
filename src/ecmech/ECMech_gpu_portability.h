@@ -72,6 +72,16 @@
 #define ECMECH_GPU_THREADS 256
 
 /**
+ * @def ECMECH_TEAM_PTS_PER_BLOCK
+ * @brief Points per GPU block for the experimental SNLS team path
+ * (ECMECH_SNLS_TEAM): a block has ECMECH_TEAM_PTS_PER_BLOCK * team-size
+ * threads.
+ */
+#ifndef ECMECH_TEAM_PTS_PER_BLOCK
+#define ECMECH_TEAM_PTS_PER_BLOCK 32
+#endif
+
+/**
  * @def __ecmech_device_only__
  * @brief Defined when the current compilation pass is generating device (GPU) code.
  * Use to guard code that can only run/compile on the device.

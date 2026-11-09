@@ -85,6 +85,10 @@
 
 #include "SNLS_TrDLDenseG.h"
 #include "SNLS_HybrdTrDLDenseG.h"
+#if defined(ECMECH_SNLS_TEAM)
+#include "SNLS_device_forall.h"
+#include <new>
+#endif
 
 namespace ecmech {
 namespace evptn {
@@ -770,6 +774,120 @@ bool getResponseSngl(const SlipGeom& slipGeom,
     postprocess(prob_state, elastN, def_rate_d6v_sample, sdd, internal_energy, cauchy_stress_d5p_xtal, dev_strain_energy_total, halfVMidDt);
     return true;
 } // getResponseSngl
+
+#if defined(ECMECH_SNLS_TEAM)
+/**
+ * Per-team shared storage that getResponseSnglTeam needs, one slot per team
+ * packed into a block (snls::forall_team's teamBase indexes the slots).
+ * Sized for the EvptnUpdstProblem solver of one model.
+ */
+template<class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
+struct TeamSlots {
+    using Prob = EvptnUpdstProblem<SlipGeom, Kinetics, ThermoElastN, ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>>;
+    using Solver = snls::SNLSTrDlDenseG<Prob>;
+    static constexpr int nDim = Prob::nDimSys;
+    static constexpr int solverWords = (sizeof(Solver) + sizeof(double) - 1) / sizeof(double);
+    /// raw storage for the solver object (built by tid 0 with placement new)
+    double solver[solverWords];
+    /// Jacobian then residual, for the cooperative LU
+    double scratch[nDim * nDim + nDim];
+    int piv[nDim + 1];
+    /// tid 0's preprocess() result, read by the whole team
+    bool preOk;
+};
+
+/**
+ * Team version of getResponseSngl: `nthreads` threads work on one point.
+ *
+ * Everything except the Newton solve runs on tid 0 only. preprocess() also
+ * writes global memory (the temperature, through the EOS). The solver
+ * object lives in the team's shared slot, because solveTeam() needs every
+ * thread of the team to see the same solver state. The team cooperates
+ * only on the LU solve inside each Newton iteration.
+ *
+ * Every thread of the team must call this, and it must be called the same
+ * number of times by every team packed into a block, because solveTeam()
+ * contains block-wide barriers. That is why a point whose preprocess()
+ * failed still goes through solveTeam(), with maxIter = 0.
+ *
+ * Returns the same status on every thread of the team.
+ */
+template<class SlipGeom, class Kinetics, class ThermoElastN, class EosModel, class Slots>
+__ecmech_hdev__
+inline
+bool getResponseSnglTeam(int tid, int nthreads, int teamBase,
+                         snls::TeamConsensus& consensus,
+                         Slots& slots,
+                         const SlipGeom& slipGeom,
+                         const Kinetics& kinetics,
+                         const ThermoElastN& elastN,
+                         const EosModel& eos,
+                         const double dt,
+                         const double tolerance,
+                         const double* const def_rate_d6v_sample,
+                         const double* const spin_vec_sample,
+                         const double* const rel_vol_ratios,
+                         double* const internal_energy,
+                         double* const cauchy_stress_d6p,
+                         double* const hist,
+                         double& tkelv,
+                         double* const sdd,
+                         double* const mtanSD,
+                         int outputLevel = 0)
+{
+    auto prob_state = ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>(hist, cauchy_stress_d6p, tkelv, def_rate_d6v_sample, spin_vec_sample, rel_vol_ratios, dt);
+
+    double halfVMidDt = 0.0, dev_strain_energy_total = 0.0;
+    if (tid == 0) {
+        slots.preOk = preprocess(slipGeom, kinetics, eos, elastN, rel_vol_ratios, internal_energy, def_rate_d6v_sample, prob_state, halfVMidDt, dev_strain_energy_total);
+    }
+    // Only tid 0's problem object is ever used (it alone calls computeRJ);
+    // the other threads build theirs from a state preprocess() did not
+    // fill in, which is harmless.
+    EvptnUpdstProblem prob(slipGeom, kinetics, elastN, prob_state);
+    using Solver = snls::SNLSTrDlDenseG<decltype(prob)>;
+    static_assert(sizeof(Solver) <= sizeof(slots.solver), "TeamSlots solver storage too small");
+    Solver* solver = reinterpret_cast<Solver*>(&slots.solver[0]);
+    snls::TrDeltaControl deltaControl;
+    deltaControl._deltaInit = 1e0;
+    if (tid == 0) {
+        new (solver) Solver(prob);
+        static constexpr int maxIter = 200;
+        solver->setupSolver(slots.preOk ? maxIter : 0, tolerance, &deltaControl, outputLevel);
+        for (int iX = 0; iX < solver->getNDim(); ++iX) {
+            solver->_x[iX] = 0e0;
+        }
+    }
+    RAJA::LaunchContext{}.teamSync();
+
+    const snls::SNLSStatus_t status = solver->solveTeam(tid, nthreads, teamBase, consensus,
+                                                        &slots.scratch[0], &slots.piv[0]);
+    const bool ok = slots.preOk && (status >= snls::converged);
+
+    if (tid == 0) {
+        if (ok) {
+            double cauchy_stress_d5p_xtal[ecmech::nsvec];
+            if (mtanSD != nullptr) {
+                computeTangentStiffness(prob, *solver, prob_state, mtanSD);
+            }
+            prob.stateFromX(prob_state.elast_d5_u, prob_state.quat_u, solver->_x);
+            hist[iHistA_nFEval] = solver->getNFEvals(); // does _not_ include updateH iterations
+            postprocess_prob<Kinetics::nH>(prob, prob_state, cauchy_stress_d5p_xtal);
+            postprocess(prob_state, elastN, def_rate_d6v_sample, sdd, internal_energy, cauchy_stress_d5p_xtal, dev_strain_energy_total, halfVMidDt);
+        }
+#if defined(__ecmech_host_only__)
+        else if (slots.preOk) {
+            std::cout << "trust region solver residual " << solver->getRes() << " exit status " << status << std::endl;
+            ECMECH_WARN(__func__, "Solver(s) failed to converge -- will try again with implicit elastic strain solve only");
+        }
+#endif
+        solver->~Solver();
+    }
+    // Keep the next use of this team's slot (if any) behind a barrier.
+    RAJA::LaunchContext{}.teamSync();
+    return ok;
+} // getResponseSnglTeam
+#endif // ECMECH_SNLS_TEAM
 
 #if defined(ECMECH_EXTRA_SOLVERS)
 /**

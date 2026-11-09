@@ -49,6 +49,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <cstdlib>
 
 #define NEVALS_COUNTS false
 
@@ -68,6 +69,18 @@ int main(int argc, char *argv[]){
 
    double dt = 0.00025;
    int nsteps = 60;
+#if defined(RAJA_ENABLE_CUDA)
+   if (const char* st = std::getenv("ECMECH_CUDA_STACK")) {
+      cudaDeviceSetLimit(cudaLimitStackSize, std::atoi(st));
+      size_t v = 0; cudaDeviceGetLimit(&v, cudaLimitStackSize);
+      std::cout << "cudaLimitStackSize = " << v << std::endl;
+   }
+   if (const char* hp = std::getenv("ECMECH_CUDA_HEAP")) {
+      cudaDeviceSetLimit(cudaLimitMallocHeapSize, std::strtoull(hp, nullptr, 10));
+      size_t v = 0; cudaDeviceGetLimit(&v, cudaLimitMallocHeapSize);
+      std::cout << "cudaLimitMallocHeapSize = " << v << std::endl;
+   }
+#endif
 
    int nqpts = 0;
    int num_props = 0;
@@ -423,6 +436,10 @@ int main(int argc, char *argv[]){
    RAJA::RangeSegment default_range(0, nqpts);
 
    RAJA::Timer run_time;
+   // Material-model-only timer: getResponseECM's forall calls are
+   // synchronous, so this measures the material update (including any
+   // fallback-solver retry) without the setup/retrieve kernels.
+   RAJA::Timer mat_time;
 
    run_time.start();
 
@@ -432,10 +449,12 @@ int main(int argc, char *argv[]){
                  cauchy_stress_d6p_array, def_rate_d6v_array, spin_vec_array, ddsdde_array,
                  rel_vol_ratios_array, internal_energy_array, tkelv_array);
       // run our material model
+      mat_time.start();
       mat_model_kernel(mat_model_base, nqpts, dt,
                        state_vars, cauchy_stress_d6p_array,
                        def_rate_d6v_array, spin_vec_array, ddsdde_array,
                        rel_vol_ratios_array, internal_energy_array, tkelv_array, sdd_array);
+      mat_time.stop();
       // retrieve all of the data and put it back in the global arrays
       retrieve_data(nqpts, num_state_vars,
                     cauchy_stress_d6p_array, rel_vol_ratios_array,
@@ -572,6 +591,8 @@ int main(int argc, char *argv[]){
 
    std::cout << "Run time of set-up, material, and retrieve kernels over " <<
       nsteps << " time steps is: " << time << "(s)" << std::endl;
+   std::cout << "Material kernel time over " << nsteps << " time steps is: "
+             << mat_time.elapsed() << "(s)" << std::endl;
    // All the variables share the same memory buffer so once the mm object goes out of scope
    // it's deconstructor will free all of the memory used
 
