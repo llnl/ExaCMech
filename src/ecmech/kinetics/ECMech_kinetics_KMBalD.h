@@ -570,6 +570,13 @@ namespace ecmech {
                   mts_dfac = mts_dfac * 1e10;
                   // !END IF
                }
+               else if (m_p == one) {
+                  // p = 1 given as a run-time parameter (the pOne template
+                  // flag not set): pow(|t|, 1) is |t| and the mts_dfac factor
+                  // is 1, so skip the (expensive, especially on GPUs) pow.
+                  // The branch is uniform across points (a model parameter).
+                  p_func = t_frac;
+               }
                else {
                   p_func = pow(fabs(t_frac), m_p);
                   p_func = copysign(p_func, t_frac);
@@ -588,6 +595,11 @@ namespace ecmech {
             }
             else {
                if (qOne) {
+                  pq_fac = q_arg;
+               }
+               else if (m_q == one) {
+                  // q = 1 at run time: same reasoning as for p above
+                  // (q_arg > 0 here, so the copysign is a no-op).
                   pq_fac = q_arg;
                }
                else {

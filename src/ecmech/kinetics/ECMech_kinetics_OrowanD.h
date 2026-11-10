@@ -876,6 +876,12 @@ namespace ecmech {
                   mts_dfac = mts_dfac * 1e10;
                   // !END IF
                }
+               else if (m_p == one) {
+                  // p = 1 at run time (pOne not set): pow(|t|, 1) is |t| and
+                  // the mts_dfac factor is 1, so skip the pow (see
+                  // KineticsKMBalD::get_mts_dG). Uniform across points.
+                  p_func = t_frac;
+               }
                else {
                   p_func = pow(fabs(t_frac), m_p);
                   p_func = copysign(p_func, t_frac);
@@ -894,6 +900,10 @@ namespace ecmech {
             }
             else {
                if (qOne) {
+                  pq_fac = q_arg;
+               }
+               else if (m_q == one) {
+                  // q = 1 at run time: as for p above (q_arg > 0 here)
                   pq_fac = q_arg;
                }
                else {
