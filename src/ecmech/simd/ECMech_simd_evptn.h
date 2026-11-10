@@ -16,6 +16,8 @@
 #if defined(ECMECH_SIMD_EXPT)
 
 #include <cstdlib>
+#include <cstdio>
+#include <algorithm>
 #include "simd/ECMech_simd_core.h"
 #include "simd/ECMech_simd_kinetics.h"
 #include "evptn/ECMech_evptnSngl.h"
@@ -667,6 +669,74 @@ struct simd_supported {
                                  && has_simd<Kinetics>::value;
 };
 
+template<class KinS, class = void> struct has_simd_hardening : std::false_type {};
+template<class KinS> struct has_simd_hardening<KinS, std::void_t<decltype(KinS::simdHardening)>>
+   : std::integral_constant<bool, KinS::simdHardening> {};
+
+/// The EOS part of evptn::preprocess (fixed slip geometry), per point
+template<class EosModel, class PS>
+inline void preprocess_eos(const EosModel& eos, const double* const rel_vol_ratios, const double* const internal_energy,
+                           const double* const def_rate_d6v_sample, PS& prob_state,
+                           double& halfVMidDt, double& dev_strain_energy_total)
+{
+   halfVMidDt = oneqrtr * (rel_vol_ratios[0] + rel_vol_ratios[1]) * prob_state.dt;
+   dev_strain_energy_total = halfVMidDt * vecsInnerSvecDev(prob_state.cauchy_stress_d6p, def_rate_d6v_sample);
+   const double energy_old = internal_energy[ecmech::i_ne_total];
+   {
+      double pressure_BOS;
+      const double rel_vol_old = rel_vol_ratios[0];
+      eos.evalPT(pressure_BOS, prob_state.tkelv, rel_vol_old, energy_old);
+   }
+   {
+      const double pressure_old = prob_state.cauchy_stress_d6p[6];
+      double tkelv_new, dpde, dpdv, dtde;
+      updateSimple(eos, prob_state.pressure_EOS, tkelv_new, prob_state.energy_new, prob_state.bulk_modulus_new,
+                   dpde, dpdv, dtde, rel_vol_ratios[1], rel_vol_ratios[3], energy_old, pressure_old);
+   }
+}
+
+/// KineticsOrowanD::updateH + updateHOrowanReduced (LOGFORM) on a pack:
+/// the reduced dislocation-density solve of all W points at once
+template<class KinS, class PS>
+inline void updateHOrowanReducedSimd(const KinS& kinS, PS* const* ps, bool* const ok, const double dt)
+{
+   constexpr int n = KinS::nS;
+   const double hdn_min = kinS.hdnMin();
+   const double berg = kinS.bergMag();
+   using HP = typename KinS::template HProblem<vdouble>;
+   HP prob(kinS, dt);
+   vmask active = (vdouble(0.0) == 0.0);
+   int lref = 0;
+   while (lref < W - 1 && !ok[lref]) { ++lref; }
+   for (int l = 0; l < W; ++l) {
+      const int s = ok[l] ? l : lref;
+      if (!ok[l]) { active[l] = false; }
+      const double* const hs_o = ps[s]->h_state;
+      const double* const gdot = ps[s]->gdot;
+      for (int i = 0; i < n; i++) {
+         const double div = fmax(hs_o[i], hdn_min) * berg;
+         prob.nu[i][l] = std::abs(gdot[i]) / div;
+         prob.y_m_o[i][l] = log(fmax(hs_o[i], hdn_min));
+         prob.y_t_o[i][l] = log(fmax(hs_o[n + i], hdn_min));
+      }
+   }
+   prob.setScales();
+   snls::TrDeltaControl deltaControl;
+   deltaControl._deltaInit = 1e0;
+   TrDlDenseGSimd<HP, vdouble> solver(prob, deltaControl);
+   solver.solve(1e-10, 100, active);
+   vdouble h[2 * n];
+   prob.getHn(h, solver.x);
+   for (int l = 0; l < W; ++l) {
+      if (!ok[l]) { continue; }
+      if (!solver.converged[l]) {
+         ok[l] = false; // as preprocess: "Hardening failed to converge"
+         continue;
+      }
+      for (int i = 0; i < 2 * n; i++) { ps[l]->h_state_u[i] = std::exp(static_cast<double>(h[i][l])); }
+   }
+}
+
 /// Run-time switch ECMECH_SIMD=1
 inline bool simdEnabled()
 {
@@ -694,6 +764,7 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
    using ProbV = EvptnUpdstProblemSimd<SlipGeom, Kinetics, vdouble>;
    using KinS = SimdKinetics<Kinetics>;
    static_assert(simd_supported<SlipGeom, Kinetics, ThermoElastN>::value, "unsupported model for the SIMD path");
+   constexpr bool hardeningOnPacks = has_simd_hardening<KinS>::value;
 
    const KinS kinS(kinetics, SlipGeom::nslip);
    double K_diag[ecmech::ntvec];
@@ -706,6 +777,10 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
    snls::TrDeltaControl deltaControl;
    deltaControl._deltaInit = 1e0;
    const int nPacks = (nPassed + W - 1) / W;
+   // ECMECH_SIMD_STATS=1: lane utilization of the main solve
+   // (useful evaluations / (W x evaluations the packs ran)), printed every 60 calls
+   static const bool statsOn = std::getenv("ECMECH_SIMD_STATS") != nullptr;
+   static long statUseful = 0, statIssued = 0, statCalls = 0;
    const unsigned int nHist = history_stride;
    if (nHist > 128) { ECMECH_FAIL(__func__, "SIMD path: history too long for the padding scratch"); }
 
@@ -743,8 +818,18 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
          }
          ps[l] = new (psMem[l]) PS(histL[l], stressL[l], *tL[l], &def_rate_d6vV[def_rate_stride * i],
                                    &spin_vecV[spin_v_stride * i], &rel_vol_ratiosV[vol_ratio_stride * i], dt);
-         ok[l] = evptn::preprocess(slipGeom, kinetics, eos, elastN, &rel_vol_ratiosV[vol_ratio_stride * i],
-                                   energyL[l], &def_rate_d6vV[def_rate_stride * i], *ps[l], halfVMidDt[l], devE[l]);
+         if constexpr (hardeningOnPacks) {
+            preprocess_eos(eos, &rel_vol_ratiosV[vol_ratio_stride * i], energyL[l], &def_rate_d6vV[def_rate_stride * i],
+                           *ps[l], halfVMidDt[l], devE[l]);
+            ok[l] = true;
+         }
+         else {
+            ok[l] = evptn::preprocess(slipGeom, kinetics, eos, elastN, &rel_vol_ratiosV[vol_ratio_stride * i],
+                                      energyL[l], &def_rate_d6vV[def_rate_stride * i], *ps[l], halfVMidDt[l], devE[l]);
+         }
+      }
+      if constexpr (hardeningOnPacks) {
+         updateHOrowanReducedSimd(kinS, ps, ok, dt);
       }
       int lref = 0;
       while (lref < W - 1 && !ok[lref]) { ++lref; }
@@ -778,6 +863,14 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
 
       TrDlDenseGSimd<ProbV, vdouble> solver(prob, deltaControl);
       solver.solve(tolerance, 200, active0);
+      if (statsOn) {
+         long sum = 0, mx = 0;
+         for (int l = 0; l < W; ++l) { if (real[l] && ok[l]) { sum += solver.fevals[l]; mx = std::max<long>(mx, solver.fevals[l]); } }
+         #pragma omp atomic
+         statUseful += sum;
+         #pragma omp atomic
+         statIssued += mx * W;
+      }
 
       // tangent and the converged-state values, on the pack (one more
       // evaluation, as computeTangentStiffness does)
@@ -825,6 +918,10 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
                             cauchy_stress_d5p_xtal, devE[l], halfVMidDt[l]);
          p.~PS();
       }
+   }
+   if (statsOn && (++statCalls % 60 == 0)) {
+      std::printf("SIMDSTATS lanes %d main-solve lane utilization %.3f (useful %ld / issued %ld)\n",
+                  W, double(statUseful) / double(statIssued), statUseful, statIssued);
    }
 }
 

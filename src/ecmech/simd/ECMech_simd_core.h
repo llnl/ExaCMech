@@ -42,6 +42,9 @@ inline vdouble exp(const vdouble& x) { return vdouble(_ZGVdN4v_exp(static_cast<_
 inline vdouble log(const vdouble& x) { return vdouble(_ZGVdN4v_log(static_cast<__m256d>(x))); }
 inline vdouble sin(const vdouble& x) { return vdouble(_ZGVdN4v_sin(static_cast<__m256d>(x))); }
 inline vdouble cos(const vdouble& x) { return vdouble(_ZGVdN4v_cos(static_cast<__m256d>(x))); }
+extern "C" __m256d _ZGVdN4vv_pow(__m256d, __m256d);
+inline vdouble pow(const vdouble& x, const vdouble& y) { return vdouble(_ZGVdN4vv_pow(static_cast<__m256d>(x), static_cast<__m256d>(y))); }
+inline vdouble pow(const vdouble& x, double y) { return pow(x, vdouble(y)); }
 #endif
 
 template<class R> struct real_traits { using mask = bool; };
@@ -50,7 +53,7 @@ template<> struct real_traits<vdouble> { using mask = vmask; };
 template<class R> using mask_t = typename real_traits<R>::mask;
 
 inline double  select(bool m, double a, double b) { return m ? a : b; }
-inline vdouble select(const vmask& m, const vdouble& a, const vdouble& b) { vdouble r = b; stdx::where(m, r) = a; return r; }
+[[gnu::always_inline]] inline vdouble select(const vmask& m, const vdouble& a, const vdouble& b) { vdouble r = b; stdx::where(m, r) = a; return r; }
 inline bool any(bool m) { return m; }
 inline bool any(const vmask& m) { return stdx::any_of(m); }
 inline bool all(bool m) { return m; }

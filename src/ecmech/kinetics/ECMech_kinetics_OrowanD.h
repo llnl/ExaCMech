@@ -207,6 +207,9 @@
 #include "RAJA/RAJA.hpp"
 
 namespace ecmech {
+#if defined(ECMECH_SIMD_EXPT)
+   namespace simd { template<class Kinetics> struct SimdKinetics; }
+#endif
    /**
     * @brief Mobile/total dislocation-density (Orowan) hardening law with balanced,
     * thermally-activated MTS-like slip kinetics and phonon drag.
@@ -664,6 +667,10 @@ namespace ecmech {
             }
          }
 
+#if defined(ECMECH_SIMD_EXPT)
+         // SIMD experiment: the pack versions read the model constants directly
+         template<class> friend struct ::ecmech::simd::SimdKinetics;
+#endif
       private:
 
          /** @brief Number of slip systems handled by this instance. */
