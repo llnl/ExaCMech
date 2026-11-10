@@ -291,8 +291,8 @@ namespace evptn {
             constexpr int ns = SlipGeom::nslip;
             R d[ecmech::ntvec];
             thermoElastN.dTdepsDiag(d, inv_a_vol);
-            const R* const P = slip_geom.getP();
-            const R* const Q = slip_geom.getQ();
+            const auto* const P = slip_geom.getP();
+            const auto* const Q = slip_geom.getQ();
             for (int iT = 0; iT < ecmech::ntvec; ++iT) {
                 R pw[ns];
                 for (int s = 0; s < ns; ++s) { pw[s] = P[ECMECH_NM_INDX(iT, s, ecmech::ntvec, ns)] * dgdot_dtau[s]; }
@@ -381,7 +381,7 @@ namespace evptn {
         }
         if constexpr (SlipGeom::nslip > 0) {
         R dgdot_deps_sph[SlipGeom::nslip];
-        const R* const slipP = slip_geom.getP();
+        const auto* const slipP = slip_geom.getP();
         for (int iSlip = 0; iSlip < SlipGeom::nslip; ++iSlip) {
             R dtaua_deps_sph = 0.0;
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {

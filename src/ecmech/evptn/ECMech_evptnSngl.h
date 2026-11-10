@@ -156,7 +156,8 @@ namespace evptn {
  * @note Side effects on prob_state are essential (not const)
  * @note Energy contribution completed in postprocess() after stress converges
  */
-template<class SlipGeom, class Kinetics, class EosModel, class ThermoElastN, class ProbState, bool RStarSolve=false>
+/// SkipHardening: only the EOS part (the caller updates the hardness itself)
+template<class SlipGeom, class Kinetics, class EosModel, class ThermoElastN, class ProbState, bool RStarSolve=false, bool SkipHardening=false>
 __ecmech_hdev__
 inline
 bool preprocess(const SlipGeom& slipGeom,
@@ -223,10 +224,12 @@ bool preprocess(const SlipGeom& slipGeom,
         // still need to rotate stress state back to original value
         slipGeom.getPQ(hvals, P, Q, stress_dev6_press);
     }
+    if constexpr (!SkipHardening) {
     const int nfevals = kinetics.updateH(prob_state.h_state_u, prob_state.h_state, prob_state.dt, prob_state.gdot, hvals, prob_state.tkelv);
     if (nfevals < 0) {
         ECMECH_WARN(__func__, "Hardening failed to converge");
         return false;
+    }
     }
 #if defined(ECMECH_EXTRA_SOLVERS)
     if constexpr (RStarSolve) {

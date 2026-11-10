@@ -205,11 +205,10 @@
 #include <vector>
 
 #include "RAJA/RAJA.hpp"
+#include "SNLS_TrDLDenseG.h"
+#include "SNLS_TrDLDenseG_Lanes.h"
 
 namespace ecmech {
-#if defined(ECMECH_SIMD_EXPT)
-   namespace simd { template<class Kinetics> struct SimdKinetics; }
-#endif
    /**
     * @brief Mobile/total dislocation-density (Orowan) hardening law with balanced,
     * thermally-activated MTS-like slip kinetics and phonon drag.
@@ -300,28 +299,42 @@ namespace ecmech {
    /// Reduced-form counterpart of updateHN for KineticsOrowanD (log form).
    /// hs_n and hs_o hold log densities, mobile first. Same solver settings
    /// as updateHN; returns the number of function evaluations or -1.
-   template<class Kinetics>
+   /// For one point (R = double) returns the number of function
+   /// evaluations (-1 on failure), as before; for a pack of points (solved
+   /// in lockstep with SNLSTrDlDenseG_Lanes) returns the points that converged.
+   template<class Kinetics, class R = double>
    __ecmech_hdev__
    inline
-   int updateHOrowanReduced(const Kinetics* const kinetics,
-                            double* const hs_n,
-                            const double* const hs_o,
-                            double dt,
-                            const double* const nu,
-                            int outputLevel = 0)
+   auto updateHOrowanReduced(const Kinetics* const kinetics,
+                             R* const hs_n,
+                             const R* const hs_o,
+                             double dt,
+                             const R* const nu,
+                             int outputLevel = 0)
    {
       constexpr int n = Kinetics::nH / 2;
-      OrowanReducedHProblem<Kinetics> prob(kinetics, &hs_o[0], &hs_o[n], nu, dt);
-      snls::SNLSTrDlDenseG<OrowanReducedHProblem<Kinetics> > solver(prob);
+      using Prob = OrowanReducedHProblem<Kinetics, R>;
+      Prob prob(kinetics, &hs_o[0], &hs_o[n], nu, dt);
       snls::TrDeltaControl deltaControl;
       deltaControl._deltaInit = 1e0;
-      solver.setupSolver(100, 1e-10, &deltaControl, outputLevel);
-      for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
-      const snls::SNLSStatus_t status = solver.solve();
-      int nFevals = solver.getNFEvals();
-      if (status != snls::converged) { nFevals = -1; }
-      prob.getHn(hs_n, solver._x);
-      return nFevals;
+      if constexpr (lanes_of<R>() == 1) {
+         snls::SNLSTrDlDenseG<Prob> solver(prob);
+         solver.setupSolver(100, 1e-10, &deltaControl, outputLevel);
+         for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
+         const snls::SNLSStatus_t status = solver.solve();
+         int nFevals = solver.getNFEvals();
+         if (status != snls::converged) { nFevals = -1; }
+         prob.getHn(hs_n, solver._x);
+         return nFevals;
+      }
+      else {
+         snls::SNLSTrDlDenseG_Lanes<Prob, R> solver(prob);
+         solver.setupSolver(100, 1e-10, &deltaControl);
+         for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
+         solver.solve(all_lanes<R>());
+         prob.getHn(hs_n, solver._x);
+         return solver.converged;
+      }
    }
 
    template<bool withGAthermal,
@@ -667,10 +680,6 @@ namespace ecmech {
             }
          }
 
-#if defined(ECMECH_SIMD_EXPT)
-         // SIMD experiment: the pack versions read the model constants directly
-         template<class> friend struct ::ecmech::simd::SimdKinetics;
-#endif
       private:
 
          /** @brief Number of slip systems handled by this instance. */
@@ -1268,6 +1277,45 @@ namespace ecmech {
           * negative value if the (non-substepped) solve failed to converge.
           * @see updateHN in ECMech_kinetics.h
           */
+         /// Inputs of the dislocation-density update (value type R: one
+         /// point or a pack): bounded (log-)densities and the per-slip-system
+         /// rates nu = |gdot| / (rho_m b).
+         template<class R>
+         __ecmech_hdev__
+         inline
+         void hardeningInputs(R* const ihs_o, R* const nu, const R* const hs_o, const R* const gdot) const
+         {
+            for (int i = 0; i < nslip * 2; i++) {
+               if (i < nslip) {
+                  const R div = perSS ? fmax(hs_o[i], R(m_hdn_min)) * m_berg_mag[i] :
+                                fmax(hs_o[i], R(m_hdn_min)) * m_berg_mag[0];
+                  nu[i] = fabs(gdot[i]) / (div);
+               }
+               ihs_o[i] = fmax(hs_o[i], R(m_hdn_min));
+               if (LOGFORM) {
+                  ihs_o[i] = log(ihs_o[i]);
+               }
+            }
+         }
+
+         /// The reduced log-form update (updateH with LOGFORM) for a pack
+         /// of points: hs_u gets the new densities; returns the points
+         /// that converged.
+         template<class R>
+         inline
+         mask_t<R> updateHLanes(R* const hs_u, const R* const hs_o, double dt, const R* const gdot) const
+         {
+            static_assert(LOGFORM, "pack hardening update: reduced log-form solve only");
+            R ihs_o[SlipGeom::nslip * 2];
+            R nu[SlipGeom::nslip];
+            hardeningInputs(ihs_o, nu, hs_o, gdot);
+            const mask_t<R> ok = updateHOrowanReduced<KineticsOrowanD, R>(this, &hs_u[0], &ihs_o[0], dt, nu);
+            for (int i = 0; i < nslip * 2; i++) {
+               hs_u[i] = exp(hs_u[i]);
+            }
+            return ok;
+         }
+
          __ecmech_hdev__
          inline
          int
@@ -1282,17 +1330,7 @@ namespace ecmech {
 
             double ihs_o[SlipGeom::nslip * 2];
             double nu[SlipGeom::nslip];
-            for (int i = 0; i < nslip * 2; i++) {
-               if (i < nslip) {
-                  const double div = perSS ? fmax(hs_o[i], m_hdn_min) * m_berg_mag[i] :
-                                     fmax(hs_o[i], m_hdn_min) * m_berg_mag[0];
-                  nu[i] = abs(gdot[i]) / (div);
-               }
-               ihs_o[i] = fmax(hs_o[i], m_hdn_min);
-               if (LOGFORM) {
-                  ihs_o[i] = log(ihs_o[i]);
-               }
-            }
+            hardeningInputs(ihs_o, nu, hs_o, gdot);
 
 #if !defined(ECMECH_OROWAN_FULL_HSOLVE)
             int nFEvals;

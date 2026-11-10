@@ -8,6 +8,7 @@
 
 #include <experimental/simd>
 #include <cmath>
+#include <immintrin.h>
 #include "SNLS_value_type.h"
 
 namespace ecmech {
@@ -32,9 +33,16 @@ struct value_traits<ecmech::simd::vdouble> {
    static inline double get(const R& v, int l) { return v[l]; }
    static inline void set(R& v, int l, double x) { v[l] = x; }
    static inline R gather(const R* const b, const index& i) {
+#if defined(__AVX2__) && !defined(__AVX512F__)
+      // lane l of b[i_l] is the double at offset 4 i_l + l
+      const __m256d off = _mm256_add_pd(_mm256_mul_pd(static_cast<__m256d>(i), _mm256_set1_pd(4.0)),
+                                        _mm256_set_pd(3.0, 2.0, 1.0, 0.0));
+      return R(_mm256_i32gather_pd(reinterpret_cast<const double*>(b), _mm256_cvtpd_epi32(off), 8));
+#else
       R r;
       for (int l = 0; l < lanes; ++l) { r[l] = b[static_cast<int>(i[l])][l]; }
       return r;
+#endif
    }
 };
 template<>
