@@ -12,7 +12,7 @@
  *
  * `LARGE_DD` (see `test/CMakeLists.txt`) swaps in `setup_kin_OroD_Iso_FCC.h`'s
  * `LARGE_DD` branch (much higher initial densities), which also converges in fewer
- * solver iterations (`nevals = 2` vs. `4`) since the relative change in density over one
+ * solver iterations (`nevals = 2` vs. `5`) since the relative change in density over one
  * step is smaller when the starting densities are already large.
  */
 

@@ -1090,13 +1090,18 @@ namespace ecmech {
           * one time step.
           *
           * First computes each slip system's dislocation glide velocity via the Orowan
-          * relation, `nu[i] = |gdot[i]| / (max(hs_o[i], m_hdn_min) · bᵢ)`, then drives
-          * the shared vector-hardness SNLS solve (#updateHN, with `relaxed_solver =
-          * true`).
+          * relation, `nu[i] = |gdot[i]| / (max(hs_o[i], m_hdn_min) · bᵢ)`, then solves
+          * the implicit density update.
           *
           * If `LOGFORM`, the solve is done in log space (both densities floored at
           * #m_hdn_min before taking the log), guaranteeing positivity by construction,
-          * and the result is exponentiated back. Otherwise, the raw (non-log) solve has
+          * and the result is exponentiated back. In that case the update is solved in
+          * the total densities only (#updateHOrowanReduced, an nslip x nslip SNLS
+          * solve; the mobile densities are solved per slip system inside each
+          * evaluation, see #reducedHardening), unless ECMECH_OROWAN_FULL_HSOLVE is
+          * defined, which keeps the coupled 2*nslip x 2*nslip solve (#updateHN).
+          * Otherwise (not `LOGFORM`) the coupled #updateHN solve is used, and the raw
+          * (non-log) solve has
           * no such guarantee, so the result is checked for negative densities; if any
           * are found, the step is retried by substepping: `dt` is split into 10 equal
           * substeps, and each substep re-derives `nu` from the *original* `gdot` (the
@@ -1336,7 +1341,9 @@ namespace ecmech {
          /**
           * @brief Evaluate the mobile/total dislocation-density evolution rates
           * (multiplication, trapping, annihilation) and their Jacobian, in log space if
-          * `LOGFORM`, for the vector-hardness SNLS solve (#updateHN) -- see the
+          * `LOGFORM`, for the coupled vector-hardness SNLS solve (#updateHN, used for
+          * the non-log form or with ECMECH_OROWAN_FULL_HSOLVE; the log form normally
+          * uses #reducedHardening instead) -- see the
           * "Hardening law" equations and symbol table in the file-level documentation
           * in ECMech_kinetics_OrowanD.h.
           *

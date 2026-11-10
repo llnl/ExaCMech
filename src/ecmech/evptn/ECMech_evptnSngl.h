@@ -343,7 +343,9 @@ bool main_problem(const double tolerance,
  * 
  * **Computation approach**:
  * 1. Enable material tangent flag in problem: prob.provideMTan(mtanSD_vecds)
- * 2. Re-evaluate Jacobian: This triggers tangent accumulation
+ * 2. Re-evaluate Jacobian: This triggers tangent accumulation. The slip
+ *    kinetics are not recomputed: EvptnUpdstProblem reuses the results of the
+ *    solver's last evaluation, which was at the same (converged) x
  * 3. Disable tangent flag: prob.clearMTan()
  * 4. Scale from rate to increment: multiply by Δt
  * 5. Add volumetric EOS contribution (3K on diagonal)
