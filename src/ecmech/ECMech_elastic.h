@@ -299,17 +299,18 @@ namespace evptn {
          * @note Output kirchoff_stress has 6 independent components (symmetric Voigt notation)
          * @note The 7th component (pressure) is not set here; managed by EOS separately
          */
+        template<class R, class T1, class T2, class T3, class T4>
         __ecmech_hdev__
         inline
-        void eval(double* const kirchoff,
-                    const double* const elast_dev_press_vec,
-                    double, // tkelv
-                    double pressure_EOS,
-                    double // energy_vol_ref
+        void eval(R* const kirchoff,
+                    const T1* const elast_dev_press_vec,
+                    T2, // tkelv
+                    T3 pressure_EOS,
+                    T4 // energy_vol_ref
                     ) const {
-            double ln_J = sqr3 * elast_dev_press_vec[iSvecS]; // vecds_s_to_trace
-            double J = exp(ln_J);
-            double kirchoff_pressure = -sqr3 * J * pressure_EOS;
+            R ln_J = sqr3 * elast_dev_press_vec[iSvecS]; // vecds_s_to_trace
+            R J = exp(ln_J);
+            R kirchoff_pressure = -sqr3 * J * pressure_EOS;
 
             vecsVAdiagB<ntvec>(kirchoff, m_K_diag, elast_dev_press_vec);
             kirchoff[iSvecS] = kirchoff_pressure; // _K_vecds_s * elast_dev_press_vec(SVEC)
@@ -373,14 +374,15 @@ namespace evptn {
          * @note For cubic symmetry, dT/dε[iSvecS,:] = 0 (no deviatoric-pressure coupling)
          * @note Method signature identical for cubic and hexagonal (same interface)
          */
+        template<class R, class T1>
         __ecmech_hdev__
         inline
-        void multDTDepsT(double* const P, // ntvec*p
-                            const double* const A, // ntvec*p
-                            double inv_a_vol,
+        void multDTDepsT(R* const P, // ntvec*p
+                            const T1* const A, // ntvec*p
+                            R inv_a_vol,
                             int p) const {
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
-                double dTdepsThis = m_K_diag[iTvec] * inv_a_vol;
+                R dTdepsThis = m_K_diag[iTvec] * inv_a_vol;
                 for (int iP = 0; iP < p; ++iP) {
                     int ii = ECMECH_NM_INDX(iTvec, iP, ecmech::ntvec, p);
                     P[ii] = dTdepsThis * A[ii];
@@ -391,9 +393,10 @@ namespace evptn {
         /// Diagonal of dT/d(elastic strain) (what multDTDepsT applies row by
         /// row): d[i] = K_ii * inv_a_vol. Lets callers skip forming
         /// multDTDepsT's ntvec x p product (see get_slip_rate_deriv_terms).
+        template<class R, class T1>
         __ecmech_hdev__
         inline
-        void dTdepsDiag(double* const d, double inv_a_vol) const {
+        void dTdepsDiag(R* const d, T1 inv_a_vol) const {
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                 d[iTvec] = m_K_diag[iTvec] * inv_a_vol;
             }
@@ -414,11 +417,12 @@ namespace evptn {
           * @param[in] kirchoff_stress Kirchhoff stress (6-component symmetric)
           * @param[in] inv_det_v_e Inverse of elastic deformation determinant 1/det(V^e)
           */
+        template<class R, class T1, class T2>
         __ecmech_hdev__
         inline
-        void getCauchy(double* const cauchy_xtal,
-                        const double* const kirchoff,
-                        double inv_det_v_e) const
+        void getCauchy(R* const cauchy_xtal,
+                        const T1* const kirchoff,
+                        T2 inv_det_v_e) const
         {
             for (int iSvec = 0; iSvec < ecmech::nsvec; ++iSvec) {
                 cauchy_xtal[iSvec] = inv_det_v_e * kirchoff[iSvec];
@@ -444,11 +448,12 @@ namespace evptn {
          * @param[in] energy_vol_ref Internal energy (unused for cubic; Grüneisen)
          * @return true (nonzero whenever the crystal is elastically strained)
          */
+        template<class R, class T1, class T2>
         __ecmech_hdev__
         inline
-        bool getDTDepsSph(double* const dT_deps_sph,
-                          const double* const elast_dev_press_vec,
-                          double // energy_vol_ref
+        bool getDTDepsSph(R* const dT_deps_sph,
+                          const T1* const elast_dev_press_vec,
+                          T2 // energy_vol_ref
                           ) const {
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                 dT_deps_sph[iTvec] = -sqr3i * m_K_diag[iTvec] * elast_dev_press_vec[iTvec];
@@ -496,15 +501,15 @@ namespace evptn {
          * @note The volumetric (S,S) pressure stiffness comes from the equation of
          *       state and is added separately by the caller
          */
-        template<size_t N=ecmech::ntvec, size_t M=ecmech::nsvec>
+        template<size_t N=ecmech::ntvec, size_t M=ecmech::nsvec, class R, class T1, class T2, class T3, class T4, class T5>
         __ecmech_hdev__
         inline
-        void multCauchyDif(double* const M6,
-                            const double* const A,
-                            const double* const elast_dev_press_vec,
-                            double deps_sph_ddef_rate_sph,
-                            double inv_det_v_e,
-                            double inv_a_vol
+        void multCauchyDif(R* const M6,
+                            const T1* const A,
+                            const T2* const elast_dev_press_vec,
+                            T3 deps_sph_ddef_rate_sph,
+                            T4 inv_det_v_e,
+                            T5 inv_a_vol
                             ) const {
             // CALL vecds_s_to_trace(tr_ln_V, s_meas%elast_dev_press_vec(SVEC))
             // det_v_e = DEXP(tr_ln_V)
@@ -516,7 +521,7 @@ namespace evptn {
             // Compute scaled tangent: M6 = (inv_det_v_e * inv_a_vol * K_diag) ⊙ A
             // where ⊙ represents element-wise multiplication in the tangent structure
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
-                double vFact = inv_det_v_e * inv_a_vol * m_K_diag[iTvec];
+                R vFact = inv_det_v_e * inv_a_vol * m_K_diag[iTvec];
                 for (int jSvec = 0; jSvec < ecmech::nsvec; ++jSvec) {
                     M6[ECMECH_NN_INDX(iTvec, jSvec, ecmech::nsvec)] = vFact * A[ECMECH_NM_INDX(iTvec, jSvec, N, M)];
                 }
@@ -531,7 +536,7 @@ namespace evptn {
             // direct J-scaling (geometric) term in the spherical column, crystal
             // frame: -(4/√3) Δt inv_det_v_e K_diag_i elast_d5v_i (see doc above)
             {
-                double vFact = -fourthirds * sqr3 * deps_sph_ddef_rate_sph * inv_det_v_e;
+                R vFact = -fourthirds * sqr3 * deps_sph_ddef_rate_sph * inv_det_v_e;
                 for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                     M6[ECMECH_NN_INDX(iTvec, iSvecS, ecmech::nsvec)] +=
                         vFact * m_K_diag[iTvec] * elast_dev_press_vec[iTvec];
@@ -764,17 +769,18 @@ namespace evptn {
          * @param[in] energy_vol_ref internal energy
          * @param[in] inv_a_vol Inverse volume scaling
          */
+        template<class R, class T1, class T2, class T3, class T4>
         __ecmech_hdev__
         inline
-        void eval(double* const kirchoff,
-                    const double* const elast_dev_press_vec,
-                    double, // tkelv
-                    double pressure_EOS,
-                    double energy_vol_ref
+        void eval(R* const kirchoff,
+                    const T1* const elast_dev_press_vec,
+                    T2, // tkelv
+                    T3 pressure_EOS,
+                    T4 energy_vol_ref
                     ) const {
-            double ln_J = sqr3 * elast_dev_press_vec[iSvecS]; // vecds_s_to_trace
-            double J = exp(ln_J);
-            double kirchoff_pressure = -sqr3 * J * pressure_EOS;
+            R ln_J = sqr3 * elast_dev_press_vec[iSvecS]; // vecds_s_to_trace
+            R J = exp(ln_J);
+            R kirchoff_pressure = -sqr3 * J * pressure_EOS;
 
             vecsVAdiagB<ntvec>(kirchoff, m_K_diag, elast_dev_press_vec);
             kirchoff[iSvecS] = kirchoff_pressure; // _K_vecds_s * elast_dev_press_vec(SVEC)
@@ -859,14 +865,15 @@ namespace evptn {
          * @note Full hexagonal stiffness (with m_K_sdax3) used in multCauchyDif
          * @note iTvecHex = 1 (basal plane component) has special anisotropy
          */
+        template<class R, class T1>
         __ecmech_hdev__
         inline
-        void multDTDepsT(double* const P, // ntvec*p
-                            const double* const A, // ntvec*p
-                            double inv_a_vol,
+        void multDTDepsT(R* const P, // ntvec*p
+                            const T1* const A, // ntvec*p
+                            R inv_a_vol,
                             int p) const {
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
-                double dTdepsThis = m_K_diag[iTvec] * inv_a_vol;
+                R dTdepsThis = m_K_diag[iTvec] * inv_a_vol;
                 for (int iP = 0; iP < p; ++iP) {
                     int ii = ECMECH_NM_INDX(iTvec, iP, ecmech::ntvec, p);
                     P[ii] = dTdepsThis * A[ii];
@@ -877,9 +884,10 @@ namespace evptn {
         /// Diagonal of dT/d(elastic strain) (what multDTDepsT applies row by
         /// row): d[i] = K_ii * inv_a_vol. Lets callers skip forming
         /// multDTDepsT's ntvec x p product (see get_slip_rate_deriv_terms).
+        template<class R, class T1>
         __ecmech_hdev__
         inline
-        void dTdepsDiag(double* const d, double inv_a_vol) const {
+        void dTdepsDiag(R* const d, T1 inv_a_vol) const {
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                 d[iTvec] = m_K_diag[iTvec] * inv_a_vol;
             }
@@ -891,11 +899,12 @@ namespace evptn {
           * @param[in] kirchoff_stress Kirchhoff stress
           * @param[in] inv_det_v_e Inverse elastic deformation determinant
           */
+        template<class R, class T1, class T2>
         __ecmech_hdev__
         inline
-        void getCauchy(double* const cauchy_xtal,
-                        const double* const kirchoff,
-                        double inv_det_v_e) const
+        void getCauchy(R* const cauchy_xtal,
+                        const T1* const kirchoff,
+                        T2 inv_det_v_e) const
         {
             for (int iSvec = 0; iSvec < ecmech::nsvec; ++iSvec) {
                 cauchy_xtal[iSvec] = inv_det_v_e * kirchoff[iSvec];
@@ -924,18 +933,19 @@ namespace evptn {
          * @param[in] energy_vol_ref Internal energy (Grüneisen term)
          * @return true, indicating the sensitivity is (generically) nonzero
          */
+        template<class R, class T1, class T2>
         __ecmech_hdev__
         inline
-        bool getDTDepsSph(double* const dT_deps_sph,
-                          const double* const elast_dev_press_vec,
-                          double energy_vol_ref
+        bool getDTDepsSph(R* const dT_deps_sph,
+                          const T1* const elast_dev_press_vec,
+                          T2 energy_vol_ref
                           ) const {
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                 dT_deps_sph[iTvec] = -sqr3i * m_K_diag[iTvec] * elast_dev_press_vec[iTvec];
             }
             dT_deps_sph[iTvecHex] += m_K_sdax3;
             {
-                double J = exp(sqr3 * elast_dev_press_vec[iSvecS]);
+                R J = exp(sqr3 * elast_dev_press_vec[iSvecS]);
                 dT_deps_sph[iTvecHex] += -sqr3 * J * m_g_vecd2 * energy_vol_ref;
             }
             return true;
@@ -977,19 +987,19 @@ namespace evptn {
           * @param[in] inv_det_v_e Inverse elastic deformation determinant
           * @param[in] inv_a_vol Inverse volume factor
           */
-        template<size_t N=ecmech::ntvec, size_t M=ecmech::nsvec>
+        template<size_t N=ecmech::ntvec, size_t M=ecmech::nsvec, class R, class T1, class T2, class T3, class T4, class T5>
         __ecmech_hdev__
         inline
-        void multCauchyDif(double* const M6,
-                            const double* const A,
-                            const double* const elast_dev_press_vec,
-                            double deps_sph_ddef_rate_sph,
-                            double inv_det_v_e,
-                            double inv_a_vol
+        void multCauchyDif(R* const M6,
+                            const T1* const A,
+                            const T2* const elast_dev_press_vec,
+                            T3 deps_sph_ddef_rate_sph,
+                            T4 inv_det_v_e,
+                            T5 inv_a_vol
                             ) const {
             // Diagonal contributions, all nsvec columns
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
-                double vFact = inv_det_v_e * inv_a_vol * m_K_diag[iTvec];
+                R vFact = inv_det_v_e * inv_a_vol * m_K_diag[iTvec];
                 for (int jSvec = 0; jSvec < ecmech::nsvec; ++jSvec) {
                     M6[ECMECH_NN_INDX(iTvec, jSvec, ecmech::nsvec)] = vFact * A[ECMECH_NM_INDX(iTvec, jSvec, N, M)];
                 }
@@ -998,7 +1008,7 @@ namespace evptn {
             // Pressure row: dsigC_de[iSvecS, iTvecHex] * A[iTvecHex, :]
             // (the EOS part of the pressure stiffness is added by the caller)
             {
-                double vFact = inv_det_v_e * inv_a_vol * m_K_sdax3;
+                R vFact = inv_det_v_e * inv_a_vol * m_K_sdax3;
                 for (int jSvec = 0; jSvec < ecmech::nsvec; ++jSvec) {
                     M6[ECMECH_NN_INDX(iSvecS, jSvec, ecmech::nsvec)] = vFact * A[ECMECH_NM_INDX(iTvecHex, jSvec, N, M)];
                 }
@@ -1008,8 +1018,8 @@ namespace evptn {
             // (see the formula in the doc comment above). The K_sdax3 term takes
             // no inv_a_vol: eval() applies none to the spherical strain slot.
             {
-                double dtFact = deps_sph_ddef_rate_sph * inv_det_v_e;
-                double vFact = -fourthirds * sqr3 * dtFact;
+                R dtFact = deps_sph_ddef_rate_sph * inv_det_v_e;
+                R vFact = -fourthirds * sqr3 * dtFact;
                 for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                     M6[ECMECH_NN_INDX(iTvec, iSvecS, ecmech::nsvec)] +=
                         vFact * m_K_diag[iTvec] * elast_dev_press_vec[iTvec];

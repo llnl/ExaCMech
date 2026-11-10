@@ -321,92 +321,68 @@ namespace ecmech {
           * @param[in] tau Resolved shear stress on each slip system [stress units].
           * @param[in] vals Kinetic values from getVals; `vals[0]` is the shared CRSS.
           */
+         template<class R>
          __ecmech_hdev__
          inline
          void
-         evalGdots(double* const gdot,
-                   double* const dgdot_dtau,
-                   const double* const tau,
-                   const double* const vals
+         evalGdots(R* const gdot,
+                   R* const dgdot_dtau,
+                   const R* const tau,
+                   const R* const vals
                    ) const
          {
-            double gAll = vals[0]; // gss%h(islip) // _gAll
+            R gAll = vals[0];
             for (int iSlip = 0; iSlip<this->nslip; ++iSlip) {
-               bool l_act;
+               mask_t<R> l_act;
                this->evalGdot(gdot[iSlip], l_act, dgdot_dtau[iSlip],
                               gAll,
                               tau[iSlip],
-                              m_mu // gss%ctrl%mu(islip)
+                              m_mu
                               );
             }
          }
 
          /**
-          * @brief Evaluate the power-law slip rate and its derivative on a single slip
-          * system:
-          *
-          *   γ̇ = γ̇_w · (|τ| / g)^(1/m) · sign(τ)
-          *   ∂γ̇/∂τ = (1/m) · (γ̇/τ)
-          *
-          * where γ̇ = `gdot`, γ̇_w = `m_gam_w`, τ = `tau`, g = `gIn`, and m = `m_xm`.
-          *
-          * The stress ratio |τ/g| (`at`) is compared against thresholds derived from
-          * #gam_ratio_min/#gam_ratio_ovf (via `m_t_min`/`m_t_max`): below `m_t_min` the
-          * system is treated as inactive (`gdot = 0`); above `m_t_max` the rate is capped
-          * at `gam_ratio_ovffx * gam_w` rather than allowed to overflow, with derivatives
-          * left at zero.
-          * @param[out] gdot Slip rate γ̇ [1/time].
-          * @param[out] l_act `true` if the slip system is active (stress ratio above
-          * `m_t_min`).
-          * @param[out] dgdot_dtau Derivative of `gdot` w.r.t. resolved shear stress.
-          * @param gIn Current CRSS (flow strength) for this slip system, g.
-          * @param tau Resolved shear stress τ [stress units].
-          * @param mu Shear modulus; not currently used.
+          * @brief Power-law slip rate of one slip system (value type R: one
+          * point or a pack, see ECMech_value_type.h).
           */
+         template<class R>
          __ecmech_hdev__
          inline
          void
          evalGdot(
-            double & gdot,
-            bool  & l_act,
-            double & dgdot_dtau, // wrt resolved shear stress
-            double   gIn,
-            double   tau,
-            double // mu not currently used
+            R & gdot,
+            mask_t<R> & l_act,
+            R & dgdot_dtau, // wrt resolved shear stress
+            const R & gIn,
+            const R & tau,
+            double
             ) const
          {
-            // zero things so that can more easily just return in inactive
-            //// gdot_w = zero; gdot_r = zero; ! not used by l_linear or l_pl
             gdot = zero;
-            //
             dgdot_dtau = zero;
-            l_act = false;
+            l_act = no_lanes<R>();
 
-            double g_i = one / gIn; // assume have checked gIn>0 elsewhere
-            double t_frac = tau * g_i; // has sign of tau
-            double at = fabs(t_frac);
+            const R g_i = one / gIn;
+            const R t_frac = tau * g_i;
+            const R at = fabs(t_frac);
 
-            if (at > m_t_min) {
-               //
-               l_act = true;
-
-               if (at > m_t_max) {
-                  // ierr = IERR_OVF_p
-                  // set gdot big, evpp may need this for recovery
-                  gdot = ecmech::gam_ratio_ovffx * m_gam_w;
-                  gdot = copysign(gdot, tau);
-                  // do not set any of deriviatives (they are, in truth, zero)
+            const auto act = (at > m_t_min);
+            if (any(act)) {
+               l_act = act;
+               const auto ovf = act && (at > m_t_max);
+               if (any(ovf)) {
+                  // ML_ERROR_RETURN_VAL_IF(exp_arg > ln_gam_ratio_ovf, ...
+                  set_where(ovf, gdot, R(copysign(R(ecmech::gam_ratio_ovffx * m_gam_w), tau)));
                }
-               else {
-                  double abslog = log(at);
-                  double blog = m_xn * abslog;
-                  double temp = m_gam_w * exp(blog);
-
-                  gdot = temp * t_frac;
-
-                  dgdot_dtau = m_xnn * gdot / tau;
-                  // dgdot_dtau = temp * m_xnn * g_i; // note: always positive, = xnn * gdot/t
-                  // dgdot_dh and dgdot_dg are the same thing for the voce model
+               const auto pl = act && !(at > m_t_max);
+               if (any(pl)) {
+                  const R abslog = log(select(pl, at, R(one)));
+                  const R blog = m_xn * abslog;
+                  const R temp = m_gam_w * exp(blog);
+                  const R g = temp * t_frac;
+                  set_where(pl, gdot, g);
+                  set_where(pl, dgdot_dtau, R(m_xnn * g / select(pl, tau, R(one))));
                }
             }
          } // evalGdot

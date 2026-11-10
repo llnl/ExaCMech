@@ -59,12 +59,12 @@
  * @see vadl_vars_set.h for deviatoric vector components (lattice frame)
  */
 
-double  c11 = c[ECMECH_NN_INDX(0, 0, ndim)];
-double  c21 = c[ECMECH_NN_INDX(1, 0, ndim)];
-double  c31 = c[ECMECH_NN_INDX(2, 0, ndim)];
-double  c12 = c[ECMECH_NN_INDX(0, 1, ndim)];
-double  c22 = c[ECMECH_NN_INDX(1, 1, ndim)];
-double  c32 = c[ECMECH_NN_INDX(2, 1, ndim)];
-double  c13 = c[ECMECH_NN_INDX(0, 2, ndim)];
-double  c23 = c[ECMECH_NN_INDX(1, 2, ndim)];
-double  c33 = c[ECMECH_NN_INDX(2, 2, ndim)];
+auto c11 = c[ECMECH_NN_INDX(0, 0, ndim)];
+auto c21 = c[ECMECH_NN_INDX(1, 0, ndim)];
+auto c31 = c[ECMECH_NN_INDX(2, 0, ndim)];
+auto c12 = c[ECMECH_NN_INDX(0, 1, ndim)];
+auto c22 = c[ECMECH_NN_INDX(1, 1, ndim)];
+auto c32 = c[ECMECH_NN_INDX(2, 1, ndim)];
+auto c13 = c[ECMECH_NN_INDX(0, 2, ndim)];
+auto c23 = c[ECMECH_NN_INDX(1, 2, ndim)];
+auto c33 = c[ECMECH_NN_INDX(2, 2, ndim)];

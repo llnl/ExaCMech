@@ -456,7 +456,7 @@ namespace evptn {
      * @see EvptnUpdstProblem for coupled elastic strain + rotation problem
      * @see ThermoElastN classes for specific anisotropic elasticity models
      */
-    template<class ThermoElastN>
+    template<class ThermoElastN, class R = double>
     class EvptnLatticeStrainProblem
     {
         public:
@@ -489,11 +489,11 @@ namespace evptn {
         __ecmech_hdev__
         EvptnLatticeStrainProblem(const ThermoElastN& thermoElastN,
                                 const double dt,
-                                const double det_v_e, 
-                                const double energy_vol_ref, 
-                                const double pressure_EOS, 
-                                const double tkelv,
-                                const double* const elast_d5_n)
+                                const R det_v_e, 
+                                const R energy_vol_ref, 
+                                const R pressure_EOS, 
+                                const R tkelv,
+                                const R* const elast_d5_n)
         : m_thermo_elast_n(thermoElastN),
         m_dt(dt), m_det_v_e(det_v_e), m_energy_vol_ref(energy_vol_ref),
         m_pressure_EOS(pressure_EOS), m_tkelv(tkelv),
@@ -543,8 +543,8 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void get_scaled_elast_strain_vec(double* const elast_d5v, // nsvec
-                                        const double* const elast_d5 // ntvec
+        void get_scaled_elast_strain_vec(R* const elast_d5v, // nsvec
+                                        const R* const elast_d5 // ntvec
                                         ) const
         {
         vecsVxa<ntvec>(elast_d5v, m_inv_a_vol, elast_d5);
@@ -555,8 +555,8 @@ namespace evptn {
 
         __ecmech_hdev__
         inline
-        void elast_strain_to_kirchoff_stress(double* const kirchoff_stress, // nsvec
-                                            const double* const elast_d5 // ntvec
+        void elast_strain_to_kirchoff_stress(R* const kirchoff_stress, // nsvec
+                                            const R* const elast_d5 // ntvec
                                         ) const
         {
         //// do not need to use elaw_T_BT here as T and BT are the same
@@ -565,7 +565,7 @@ namespace evptn {
         // CALL elawn_T(s_meas, elast_d5_f, crys%elas, tkelv, .TRUE., a_V, &
         // & pressure_EOS, energy_vol_ref, crys%i_eos_model, crys%eos_const &
         // &)
-        double elast_d5v[ecmech::nsvec];
+        R elast_d5v[ecmech::nsvec];
         this->get_scaled_elast_strain_vec(elast_d5v, elast_d5);
         //
         //// Kirchhoff stress from elast_d5v
@@ -588,11 +588,11 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void elast_strain_to_cauchy_stress(double* const cauchy, // nsvec
-                                        const double* const elast_d5_f // ntvec
+        void elast_strain_to_cauchy_stress(R* const cauchy, // nsvec
+                                        const R* const elast_d5_f // ntvec
                                         ) const
         {
-        double kirchoff[ecmech::nsvec];
+        R kirchoff[ecmech::nsvec];
         this->elast_strain_to_kirchoff_stress(kirchoff, elast_d5_f);
         m_thermo_elast_n.getCauchy(cauchy, kirchoff, m_inv_det_v_e);
         }
@@ -624,9 +624,9 @@ namespace evptn {
         template<bool calc_strain_rate = false>
         __ecmech_hdev__
         inline
-        void get_elast_strain_state(double* const elast_delta_d5,
-                                double* const elast_dt_d5,
-                                const double* const x) const
+        void get_elast_strain_state(R* const elast_delta_d5,
+                                R* const elast_dt_d5,
+                                const R* const x) const
         {
         //////////////////////////////
         // PULL VALUES out of x, with scalings
@@ -654,10 +654,10 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void stateFromX(double* const elast_d5,
-                    const double* const x) const
+        void stateFromX(R* const elast_d5,
+                    const R* const x) const
         {
-        double elast_d5_delta[ecmech::ntvec] = {};
+        R elast_d5_delta[ecmech::ntvec] = {};
         this->get_elast_strain_state(elast_d5, elast_d5_delta, x);
         }
 
@@ -690,11 +690,11 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void get_elast_strain_residual(double* const residual,
-                                    const double epsdot_scale_inv,
-                                    const double* const elast_dt_d5,
-                                    const double* const plastic_def_rate_d5,
-                                    const double* const def_rate_d5_xtal) const
+        void get_elast_strain_residual(R* const residual,
+                                    const R epsdot_scale_inv,
+                                    const R* const elast_dt_d5,
+                                    const R* const plastic_def_rate_d5,
+                                    const R* const def_rate_d5_xtal) const
         {
         for (size_t iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
             residual[m_ind_sub_elas + iTvec] = epsdot_scale_inv * ( // SCALING
@@ -737,10 +737,10 @@ namespace evptn {
         template<size_t JAC_SIZE>
         __ecmech_hdev__
         inline
-        void get_deriv_elast_strain_wrt_elast_strain(double* const jacobian,
-                                                    const double* const dDp_hat_delast_strain) const
+        void get_deriv_elast_strain_wrt_elast_strain(R* const jacobian,
+                                                    const R* const dDp_hat_delast_strain) const
         {
-        RAJA::View<double, RAJA::Layout<2>> jacob_ee(jacobian, JAC_SIZE, JAC_SIZE);
+        RAJA::View<R, RAJA::Layout<2>> jacob_ee(jacobian, JAC_SIZE, JAC_SIZE);
         // dislocation plasticity;
         // first contribution; overwrite
         for (size_t jTvec = 0; jTvec < ecmech::ntvec; ++jTvec) {
@@ -751,7 +751,7 @@ namespace evptn {
         // elastic rate
         //
         {
-            const double adti = m_inv_a_vol * m_inv_dt;
+            const R adti = m_inv_a_vol * m_inv_dt;
             for (size_t iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                 jacob_ee(iTvec, iTvec) += adti;
             }
@@ -827,20 +827,20 @@ namespace evptn {
         template<size_t JAC_SIZE, size_t ind_sub_r>
         __ecmech_hdev__
         inline
-        void get_deriv_omega_wrt_elast_strain(double* const jacobian,
-                                            const double* const elast_dt_d5,
-                                            const double elast_elast_factor,
-                                            const double* const dWp_hat_delast_strain,
-                                            const double* const A_e_M35) const
+        void get_deriv_omega_wrt_elast_strain(R* const jacobian,
+                                            const R* const elast_dt_d5,
+                                            const R elast_elast_factor,
+                                            const R* const dWp_hat_delast_strain,
+                                            const R* const A_e_M35) const
         {
         // d(B_xi)/d(elast_dev_press_vecs_f)
         //
-        RAJA::View<double, RAJA::Layout<2>> jacob_re(jacobian, JAC_SIZE, JAC_SIZE);
+        RAJA::View<R, RAJA::Layout<2>> jacob_re(jacobian, JAC_SIZE, JAC_SIZE);
 
-        double A_edot_M35[ecmech::nwvec * ecmech::ntvec];
+        R A_edot_M35[ecmech::nwvec * ecmech::ntvec];
         M35_d_AAoB_dA(A_edot_M35, elast_dt_d5);
 
-        double dt_ee_fac = m_dt * elast_elast_factor;
+        R dt_ee_fac = m_dt * elast_elast_factor;
 
         for (size_t iWvec = 0; iWvec < ecmech::nwvec; ++iWvec) {
             for (size_t jTvec = 0; jTvec < ecmech::ntvec; ++jTvec) {
@@ -884,16 +884,16 @@ namespace evptn {
         template<size_t JAC_SIZE, size_t ind_sub_h, size_t num_hard, size_t num_slip>
         __ecmech_hdev__
         inline
-        void get_deriv_hardening_wrt_elast_strain(double* const jacobian,
-                                                const double* const dhard_dgdot,
-                                                const double* const dgdot_delast_strain) const
+        void get_deriv_hardening_wrt_elast_strain(R* const jacobian,
+                                                const R* const dhard_dgdot,
+                                                const R* const dgdot_delast_strain) const
         {
         // d(B_h) / d(e)
         // jacob_he = dt * (dhdot/dgdot)(dgdot/de)
         // nh x ntvec matrix
-        double dhdot_delast_strain[num_hard * ecmech::ntvec];
+        R dhdot_delast_strain[num_hard * ecmech::ntvec];
         vecsMABT<num_hard, ecmech::ntvec, num_slip>(dhdot_delast_strain, dhard_dgdot, dgdot_delast_strain);
-        RAJA::View<double, RAJA::Layout<2>> jacob_he(jacobian, JAC_SIZE, JAC_SIZE);
+        RAJA::View<R, RAJA::Layout<2>> jacob_he(jacobian, JAC_SIZE, JAC_SIZE);
         for (size_t iH = 0; iH < num_hard; ++iH) {
             for (size_t jE = 0; jE < ecmech::ntvec; ++jE) {
                 // could also make dhdot_delast_strain into a RAJA view, but not really needed
@@ -922,25 +922,25 @@ namespace evptn {
          * @brief Determinant of elastic volume ratio (J_e = det(F_e)).
          * Relates current to reference configuration volume.
          */
-        const double m_det_v_e;
+        const R m_det_v_e;
         /**
          * @brief Internal energy at end of time step [energy/volume].
          * Used in anisotropic Grüneisen contributions to stress.
          */
-        const double m_energy_vol_ref;
+        const R m_energy_vol_ref;
         /**
          * @brief EOS pressure contribution [stress units].
          */
-        const double m_pressure_EOS;
+        const R m_pressure_EOS;
         /**
          * @brief Temperature [tempreture units].
          */
-        const double m_tkelv;
+        const R m_tkelv;
         /**
          * @brief Elastic strain at beginning of step [dimensionless, 5 components].
          * Pointer to state in history array.
          */
-        const double* const m_elast_d5_n;
+        const R* const m_elast_d5_n;
         /**
          * @brief Inverse of time step (1/Δt) [1/time].
          * Pre-computed for efficiency in residual evaluation.
@@ -949,17 +949,17 @@ namespace evptn {
         /**
          * @brief Inverse of elastic volume determinant (1/J_e).
          */
-        const double m_inv_det_v_e;
+        const R m_inv_det_v_e;
         /**
          * @brief Volume scaling factor (a_vol = J_e^(1/3)) [dimensionless].
          * Converts between spatial and material tensor norms.
          */
-        const double m_a_vol;
+        const R m_a_vol;
         /**
          * @brief Inverse volume scaling factor (1/a_vol).
          * Used in stress evaluation: σ = (1/a_vol) * K * ε_dev
          */
-        const double m_inv_a_vol;
+        const R m_inv_a_vol;
     };
 
     /**
@@ -1005,7 +1005,7 @@ namespace evptn {
      * @see EvptnUpdstProblem for coupled elastic strain + rotation integration
      * @see exponential map functions in ECMech_util.h (emap_to_quat, etc.)
      */
-    template <size_t ind_sub_r=ecmech::ntvec>
+    template <size_t ind_sub_r=ecmech::ntvec, class R = double>
     class EvptnLatticeRotationProblem {
         public:
         /**
@@ -1031,7 +1031,7 @@ namespace evptn {
          */
         __ecmech_hdev__
         EvptnLatticeRotationProblem(const double dt,
-                                const double* const xtal_ori_quat_n)
+                                const R* const xtal_ori_quat_n)
         : m_dt(dt), m_xtal_ori_quat_n(xtal_ori_quat_n) {}
         /**
          * @brief Destructor (default).
@@ -1082,10 +1082,10 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void get_rotation_state(double* const delta_omega,
-                                double* const xtal_rmat,
-                                double* const xtal_rot_mat5,
-                                const double* const x) const
+        void get_rotation_state(R* const delta_omega,
+                                R* const xtal_rmat,
+                                R* const xtal_rot_mat5,
+                                const R* const x) const
         {
         vecsVxa<ecmech::nwvec>(delta_omega, ecmech::r_scale, &(x[ind_sub_r]));
         //
@@ -1093,8 +1093,8 @@ namespace evptn {
         // CALL exp_map_cpvec(A, xi_f)
         // CALL get_c(c, A, C_n)
         //
-        double xtal_ori_quat_delta[ecmech::qdim];
-        double xtal_ori_quat_n1[ecmech::qdim];
+        R xtal_ori_quat_delta[ecmech::qdim];
+        R xtal_ori_quat_n1[ecmech::qdim];
 
         emap_to_quat(xtal_ori_quat_delta, delta_omega);
         get_c_quat(xtal_ori_quat_n1, xtal_ori_quat_delta, m_xtal_ori_quat_n);
@@ -1122,11 +1122,11 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void stateFromX(double* const xtal_ori_quat,
-                    const double* const x) const
+        void stateFromX(R* const xtal_ori_quat,
+                    const R* const x) const
         {
-        double delta_omega[ecmech::nwvec];
-        double xtal_ori_quat_delta[ecmech::qdim];
+        R delta_omega[ecmech::nwvec];
+        R xtal_ori_quat_delta[ecmech::qdim];
         vecsVxa<ecmech::nwvec>(delta_omega, ecmech::r_scale, x);
         emap_to_quat(xtal_ori_quat_delta, delta_omega);
         get_c_quat(xtal_ori_quat, xtal_ori_quat_delta, m_xtal_ori_quat_n);
@@ -1168,11 +1168,11 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void deltaOmegaFromState(double* const delta_omega,
-                                 const double* const xtal_ori_quat_n,
-                                 const double* const xtal_ori_quat_n1) const
+        void deltaOmegaFromState(R* const delta_omega,
+                                 const R* const xtal_ori_quat_n,
+                                 const R* const xtal_ori_quat_n1) const
         {
-            double xtal_ori_quat_delta[ecmech::qdim] = {};
+            R xtal_ori_quat_delta[ecmech::qdim] = {};
 
             quat_rel_rotation(xtal_ori_quat_delta, xtal_ori_quat_n1, xtal_ori_quat_n);
             quat_to_emap(delta_omega, xtal_ori_quat_delta);
@@ -1251,13 +1251,13 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void get_omega_residual(double* const residual,
-                                const double rot_incr_scale_inv,
-                                const double ee_fac,
-                                const double* const delta_omega,
-                                const double* const spin_vec_lat,
-                                const double* const plastic_spin_vec,
-                                const double* const ee_spin_vec) const
+        void get_omega_residual(R* const residual,
+                                const R rot_incr_scale_inv,
+                                const R ee_fac,
+                                const R* const delta_omega,
+                                const R* const spin_vec_lat,
+                                const R* const plastic_spin_vec,
+                                const R* const ee_spin_vec) const
         {
         // RESIDUAL B_omega
         for (int iWvec = 0; iWvec < ecmech::nwvec; ++iWvec) {
@@ -1325,11 +1325,11 @@ namespace evptn {
         template<size_t JAC_SIZE>
         __ecmech_hdev__
         inline
-        void get_deriv_omega_wrt_omega(double* const jacobian,
-                                    const double* const dspin_samp_domega) const
+        void get_deriv_omega_wrt_omega(R* const jacobian,
+                                    const R* const dspin_samp_domega) const
         {
         // d(B_xi)/d(xi_f)
-        RAJA::View<double, RAJA::Layout<2>> jacob_rr(jacobian, JAC_SIZE, JAC_SIZE);
+        RAJA::View<R, RAJA::Layout<2>> jacob_rr(jacobian, JAC_SIZE, JAC_SIZE);
         for (int iWvec = 0; iWvec < ecmech::nwvec; ++iWvec) {
             for (int jWvec = 0; jWvec < ecmech::nwvec; ++jWvec) {
                 int ijWW = ECMECH_NN_INDX(iWvec, jWvec, ecmech::nwvec);
@@ -1404,13 +1404,13 @@ namespace evptn {
         template<size_t JAC_SIZE>
         __ecmech_hdev__
         inline
-        void get_deriv_elast_strain_wrt_omega(double* const jacobian,
-                                            const double* const ddef_rate_samp_domega) const
+        void get_deriv_elast_strain_wrt_omega(R* const jacobian,
+                                            const R* const ddef_rate_samp_domega) const
         {
         // d(B_S)/d(xi_f)
         //
         // jacob_er = -dDsm_dxi(:,:)
-        RAJA::View<double, RAJA::Layout<2> > jacob_er(jacobian, JAC_SIZE, JAC_SIZE);
+        RAJA::View<R, RAJA::Layout<2> > jacob_er(jacobian, JAC_SIZE, JAC_SIZE);
         for (int jWvec = 0; jWvec<ecmech::nwvec; ++jWvec) {
             for (int iTvec = 0; iTvec<ecmech::ntvec; ++iTvec) {
                 // could also make dDsm_dxi into a RAJA view, but not really needed
@@ -1434,7 +1434,7 @@ namespace evptn {
          */
         __ecmech_hdev__
         inline
-        void get_deriv_hardening_wrt_omega(double* const /* jacobian */){}
+        void get_deriv_hardening_wrt_omega(R* const /* jacobian */){}
 
         public:
         /**
@@ -1446,7 +1446,7 @@ namespace evptn {
          * Pointer to state in history array.
          * Layout: [q₀, q₁, q₂, q₃] with |Q| = 1
          */
-        const double* const m_xtal_ori_quat_n;
+        const R* const m_xtal_ori_quat_n;
     };
 
 }

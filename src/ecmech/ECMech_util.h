@@ -78,6 +78,7 @@
 #define ECMECH_UTIL_H
 
 #include "ECMech_core.h"
+#include "ECMech_value_type.h"
 
 #include <cmath>
 
@@ -172,11 +173,11 @@ namespace ecmech {
     * 
     * Mathematical operation: v_i = a_i + b_i for i = 0, ..., n-1
     */
-   template<int n>
+   template<int n, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVapb(double* const v,
-                        const double* const a,
-                        const double* const b) {
+   inline void vecsVapb(R* const v,
+                        const T1* const a,
+                        const T2* const b) {
       for (int i = 0; i<n; ++i) {
          v[i] = a[i] + b[i];
       }
@@ -197,11 +198,11 @@ namespace ecmech {
     * @note "Adiag" in function name suggests diagonal matrix interpretation:
     *       If A = diag(a), then v = A·b
     */
-   template<int n>
+   template<int n, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVAdiagB(double* const v,
-                           const double* const a,
-                           const double* const b) {
+   inline void vecsVAdiagB(R* const v,
+                           const T1* const a,
+                           const T2* const b) {
       for (int i = 0; i<n; ++i) {
          v[i] = a[i] * b[i];
       }
@@ -220,11 +221,11 @@ namespace ecmech {
     * 
     * Common usage: Resolving stress onto slip systems, computing strain energy
     */
-   template<int n>
+   template<int n, class R, class T2>
    __ecmech_hdev__
-   inline double vecsyadotb(const double* const a,
-                            const double* const b) {
-      double y = 0.0;
+   inline R vecsyadotb(const R* const a,
+                            const T2* const b) {
+      R y = 0.0;
       for (int i = 0; i<n; ++i) {
          y += a[i] * b[i];
       }
@@ -244,10 +245,10 @@ namespace ecmech {
     * 
     * Common usage: Checking convergence criteria, measuring slip rate totals
     */
-   template<int n>
+   template<int n, class R>
    __ecmech_hdev__
-   inline double vecsssumabs(const double* const a) {
-      double s = 0.0;
+   inline R vecsssumabs(const R* const a) {
+      R s = 0.0;
       for (int i = 0; i<n; ++i) {
          s += fabs(a[i]);
       }
@@ -309,10 +310,10 @@ namespace ecmech {
     * 
     * Common usage: Normalization, checking convergence, computing tensor magnitudes
     */
-   template<int n>
+   template<int n, class R>
    __ecmech_hdev__
-   inline double vecNorm(const double* const v){
-      double retval = 0.0;
+   inline R vecNorm(const R* const v){
+      R retval = 0.0;
       for (int i = 0; i<n; ++i) {
          retval += v[i] * v[i];
       }
@@ -332,11 +333,11 @@ namespace ecmech {
     * 
     * Mathematical operation: v_i = x · a_i for i = 0, ..., n-1
     */
-   template<int n>
+   template<int n, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVxa(double* const v,
-                       double x,
-                       const double* const a) {
+   inline void vecsVxa(R* const v,
+                       T1 x,
+                       const T2* const a) {
       for (int i = 0; i<n; ++i) {
          v[i] = x * a[i];
       }
@@ -354,10 +355,10 @@ namespace ecmech {
     * 
     * @note Modifies input array in place (destructive operation)
     */
-   template<int n>
+   template<int n, class R, class T1>
    __ecmech_hdev__
-   inline void vecsVsa(double* const a,
-                       double s) {
+   inline void vecsVsa(R* const a,
+                       T1 s) {
       for (int i = 0; i<n; ++i) {
          a[i] *= s;
       }
@@ -459,11 +460,11 @@ namespace ecmech {
     * 
     * @note Unlike FORTRAN matt_x_vec_5, output is first argument
     */
-   template<int n>
+   template<int n, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVMTa(double* const p,
-                        const double* const M,
-                        const double* const v) {
+   inline void vecsVMTa(R* const p,
+                        const T1* const M,
+                        const T2* const v) {
       for (int i = 0; i<n; ++i) {
          p[i] = 0.0;
          for (int j = 0; j<n; ++j) {
@@ -486,11 +487,11 @@ namespace ecmech {
     * @param[in] a Input row vector (length n)
     * @param[in] M Matrix in row-major order (n×q)
     */
-   template<int n, int q>
+   template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVaTM(double* const p,
-                        const double* const a,
-                        const double* const M) {
+   inline void vecsVaTM(R* const p,
+                        const T1* const a,
+                        const T2* const M) {
       for (int iQ = 0; iQ<q; ++iQ) {
          p[iQ] = 0.0;
          for (int iN = 0; iN<n; ++iN) {
@@ -512,11 +513,11 @@ namespace ecmech {
     * @param[in] M Matrix in row-major order (n×q)
     * @param[in] a Input vector (length q)
     */
-   template<int n, int q>
+   template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVMa(double* const p,
-                       const double* const M,
-                       const double* const a) {
+   inline void vecsVMa(R* const p,
+                       const T1* const M,
+                       const T2* const a) {
       for (int iN = 0; iN<n; ++iN) {
          p[iN] = 0.0;
          for (int iQ = 0; iQ<q; ++iQ) {
@@ -537,11 +538,11 @@ namespace ecmech {
     * @param[in] M Square matrix in row-major order (n×n)
     * @param[in] a Input vector (length n)
     */
-   template<int n>
+   template<int n, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVMa(double* const p,
-                       const double* const M,
-                       const double* const a) {
+   inline void vecsVMa(R* const p,
+                       const T1* const M,
+                       const T2* const a) {
       for (int iN = 0; iN<n; ++iN) {
          p[iN] = 0.0;
          for (int jN = 0; jN<n; ++jN) {
@@ -567,11 +568,11 @@ namespace ecmech {
     * 
     * @note Output P is initialized to zero before accumulation
     */
-   template<int n, int q>
+   template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsMABT(double* const P,
-                        const double* const A,
-                        const double* const B)
+   inline void vecsMABT(R* const P,
+                        const T1* const A,
+                        const T2* const B)
    {
       for (int ij = 0; ij<n * n; ++ij) {
          P[ij] = 0.0;
@@ -604,11 +605,11 @@ namespace ecmech {
     * 
     * @note Output P is initialized to zero before accumulation
     */
-   template<int n, int m, int q>
+   template<int n, int m, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsMABT(double* const P,
-                        const double* const A,
-                        const double* const B) {
+   inline void vecsMABT(R* const P,
+                        const T1* const A,
+                        const T2* const B) {
       for (int ij = 0; ij<n * m; ++ij) {
          P[ij] = 0.0;
       }
@@ -639,11 +640,11 @@ namespace ecmech {
     * 
     * @note Output P is initialized to zero before accumulation
     */
-   template<int n, int m, int q>
+   template<int n, int m, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsMAB(double* const P,
-                       const double* const A,
-                       const double* const B) {
+   inline void vecsMAB(R* const P,
+                       const T1* const A,
+                       const T2* const B) {
       for (int ij = 0; ij<n * m; ++ij) {
          P[ij] = 0.0;
       }
@@ -812,9 +813,10 @@ namespace ecmech {
     * @note Always non-negative by definition
     * @note Equivalent to sqrt(2/3) times the deviatoric tensor norm
     */
+   template<class R>
    __ecmech_hdev__
-   inline double vecd_Deff(const double* const vecd) {
-      double retval = vecNorm<ecmech::ntvec>(vecd);
+   inline R vecd_Deff(const R* const vecd) {
+      R retval = vecNorm<ecmech::ntvec>(vecd);
       retval = sqr2b3 * retval;
       return retval;
    }
@@ -1145,10 +1147,11 @@ namespace ecmech {
     * @note This is a helper function, typically called via emap_to_quat
     * @note Input axis n̂ should be unit length for correct quaternion norm
     */
+   template<class R, class T1>
    __ecmech_hdev__
-   inline void inv_to_quat(double* const quat,
-                           const double* const inv) {
-      double a = inv[0] * 0.5;
+   inline void inv_to_quat(R* const quat,
+                           const T1* const inv) {
+      R a = inv[0] * 0.5;
       quat[0] = cos(a);
       a = sin(a);
       vecsVxa<nwvec>(&(quat[1]), a, &(inv[1]));
@@ -1173,14 +1176,16 @@ namespace ecmech {
     * @note Special case: ‖emap‖ = 0 → quat = [1, 0, 0, 0] (identity rotation)
     * @note ‖quat‖ = 1 (unit quaternion) upon return
     */
+   template<class R>
    __ecmech_hdev__
-   inline void emap_to_quat(double* const quat,
-                            const double* const emap) {
-      double inv[invdim] = { 0.0, 1.0, 0.0, 0.0 };
+   inline void emap_to_quat(R* const quat,
+                            const R* const emap) {
+      R inv[invdim] = { 0.0, 1.0, 0.0, 0.0 };
       inv[0] = vecNorm<emapdim>(emap);
-      if (inv[0] > idp_tiny_sqrt) {
-         double invInv = 1.0 / inv[0];
-         vecsVxa<emapdim>(&(inv[1]), invInv, emap);
+      const auto big = (inv[0] > idp_tiny_sqrt);
+      if (any(big)) {
+         const R invInv = 1.0 / select(big, inv[0], R(1.0));
+         for (int i = 0; i < emapdim; ++i) { set_where(big, inv[1 + i], R(invInv * emap[i])); }
       } // else, emap is effectively zero, so axis does not matter
       inv_to_quat(quat, inv);
    }
@@ -1248,10 +1253,11 @@ namespace ecmech {
     * @note Result is NOT automatically normalized
     * @note Quaternion multiplication is NON-commutative: q1 ⊗ q2 ≠ q2 ⊗ q1
     */
+   template<class R, class T1, class T2>
    __ecmech_hdev__
-   inline void quat_prod(double* const q,
-                         const double* const a,
-                         const double* const b) {
+   inline void quat_prod(R* const q,
+                         const T1* const a,
+                         const T2* const b) {
       q[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
 
       q[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
@@ -1371,10 +1377,11 @@ namespace ecmech {
     * @see quat_prod for underlying quaternion multiplication
     * @see quat_rel_rotation for computing incremental rotations
     */
+   template<class R, class T1, class T2>
    __ecmech_hdev__
-   inline void get_c_quat(double* const c_quat,
-                          const double* const dr_quat,
-                          const double* const cn_quat) {
+   inline void get_c_quat(R* const c_quat,
+                          const T1* const dr_quat,
+                          const T2* const cn_quat) {
       // Compute : c = c_n * dr
       quat_prod(c_quat, cn_quat, dr_quat);
    }
@@ -1398,23 +1405,24 @@ namespace ecmech {
     * @note det(C) = +1 (proper rotation, right-handed)
     * @note quat should be normalized: ‖quat‖ = 1
     */
+   template<class R, class T1>
    __ecmech_hdev__
-   inline void quat_to_tensor(double* const c, // ndim * ndim
-                              const double* const quat // qdim
+   inline void quat_to_tensor(R* const c, // ndim * ndim
+                              const T1* const quat // qdim
                               ) {
-      double x0sq = quat[0] * quat[0];
-      double x1sq = quat[1] * quat[1];
-      double x2sq = quat[2] * quat[2];
-      double x3sq = quat[3] * quat[3];
+      R x0sq = quat[0] * quat[0];
+      R x1sq = quat[1] * quat[1];
+      R x2sq = quat[2] * quat[2];
+      R x3sq = quat[3] * quat[3];
 
-      double x0x1 = quat[0] * quat[1];
-      double x0x2 = quat[0] * quat[2];
-      double x0x3 = quat[0] * quat[3];
+      R x0x1 = quat[0] * quat[1];
+      R x0x2 = quat[0] * quat[2];
+      R x0x3 = quat[0] * quat[3];
 
-      double x1x2 = quat[1] * quat[2];
-      double x1x3 = quat[1] * quat[3];
+      R x1x2 = quat[1] * quat[2];
+      R x1x3 = quat[1] * quat[3];
 
-      double x2x3 = quat[2] * quat[3];
+      R x2x3 = quat[2] * quat[3];
 
       c[ECMECH_NN_INDX(0, 0, ndim)] = x0sq + x1sq - x2sq - x3sq;
       c[ECMECH_NN_INDX(0, 1, ndim)] = two * (x1x2 - x0x3);
@@ -1445,9 +1453,10 @@ namespace ecmech {
     * @note Preserves norm: ‖vecd_sample‖ = ‖vecd_lattice‖
     * @note Used in lattice rotation updates during crystal plasticity evolution
     */
+   template<class R, class T1>
    __ecmech_hdev__
-   inline void get_rot_mat_vecd(double* const qr5x5_raw, // ntvec * ntvec
-                                const double* const c // ndim * ndim
+   inline void get_rot_mat_vecd(R* const qr5x5_raw, // ntvec * ntvec
+                                const T1* const c // ndim * ndim
                                 ) {
       // include "mc_vars.f90"
       // include "set_mc.f90"
@@ -1459,7 +1468,7 @@ namespace ecmech {
       // IF ((UBOUND(qr5x5,DIM=1) /= TVEC) .OR. (UBOUND(qr5x5,DIM=2) /= TVEC)) &
       // & CALL consider_ierr(1,location,CIERR_DIMS_p,IERR_FATAL_p)
 
-      RAJA::View<double, RAJA::Layout<2> > qr5x5(qr5x5_raw, ecmech::ntvec, ecmech::ntvec);
+      RAJA::View<R, RAJA::Layout<2> > qr5x5(qr5x5_raw, ecmech::ntvec, ecmech::ntvec);
 
       // ! if do not want to assume (c31**2+c32**2+c33**2=1)
       // qr5x5(1, 1)  =  c33 * c33 - onehalf * (c31 * c31 + c32 * c32)
@@ -1550,9 +1559,10 @@ namespace ecmech {
     * @see vecsMaTb for computing outer product (used to build full commutator)
     * @see matToPQ for decomposing matrices into symmetric/skew parts
     */
+   template<class R, class T1>
    __ecmech_hdev__
-   inline void M35_d_AAoB_dA(double* const M35, // nwvec * ntvec
-                             const double* const cmv6b // nsvec or ntvec -- cmv6b[iSvecS] not accessed
+   inline void M35_d_AAoB_dA(R* const M35, // nwvec * ntvec
+                             const T1* const cmv6b // nsvec or ntvec -- cmv6b[iSvecS] not accessed
                              ) {
 #include "util/vb_d_vars_set.h"
 
@@ -1623,50 +1633,52 @@ namespace ecmech {
     * 
     * @note Used in chain rule: ∂f/∂emap = (∂f/∂quat) · (∂quat/∂emap)
     */
+   template<class R>
    __ecmech_hdev__
    inline
-   void dquat_demap_T(double* const dqdeT_raw, // (EMAPDIM_p,QDIM_p)
-                      const double* const emap // (EMAPDIM_p)
+   void dquat_demap_T(R* const dqdeT_raw, // (EMAPDIM_p,QDIM_p)
+                      const R* const emap // (EMAPDIM_p)
                       )
    {
       const double theta_sm_a = 1e-9;
       const double oo48 = 1.0 / 48.0;
 
 
-      double theta = vecNorm<emapdim>(emap);
+      const R theta = vecNorm<emapdim>(emap);
 
-      double theta_inv, sthhbyth, halfsthh, na, nb, nc;
-      if (fabs(theta) < theta_sm_a) {
-         sthhbyth = onehalf - theta * theta * oo48; // truncated Taylor seriers; probably safe to just use onehalf and be done with it
-         halfsthh = theta * oneqrtr; // truncated Taylor seriers
-         if (fabs(theta) < idp_tiny_sqrt) {
-            // n is arbitrary, as theta is effectively zero
-            na = one; nb = zero; nc = zero;
-         }
-         else {
-            theta_inv = one / theta;
-            na = emap[0] * theta_inv; nb = emap[1] * theta_inv; nc = emap[2] * theta_inv;
-         }
+      R sthhbyth = 0.0, halfsthh = 0.0, na = 0.0, nb = 0.0, nc = 0.0;
+      const auto small = (fabs(theta) < theta_sm_a);
+      const auto tiny = (fabs(theta) < idp_tiny_sqrt);
+      const auto axis = !tiny; // n from emap
+      if (any(small)) {
+         set_where(small, sthhbyth, R(onehalf - theta * theta * oo48)); // truncated Taylor seriers; probably safe to just use onehalf and be done with it
+         set_where(small, halfsthh, R(theta * oneqrtr)); // truncated Taylor seriers
       }
-      else {
-         halfsthh = sin(theta * onehalf);
-         sthhbyth = halfsthh / theta;
-         halfsthh = halfsthh * onehalf;
-         theta_inv = one / theta;
-         na = emap[0] * theta_inv; nb = emap[1] * theta_inv; nc = emap[2] * theta_inv;
+      if (any(tiny)) {
+         // n is arbitrary, as theta is effectively zero
+         set_where(tiny, na, R(one)); set_where(tiny, nb, R(zero)); set_where(tiny, nc, R(zero));
+      }
+      if (any(!small)) {
+         const R s = sin(theta * onehalf);
+         set_where(!small, sthhbyth, R(s / select(small, R(one), theta)));
+         set_where(!small, halfsthh, R(s * onehalf));
+      }
+      if (any(axis)) {
+         const R theta_inv = one / select(axis, theta, R(one));
+         set_where(axis, na, R(emap[0] * theta_inv)); set_where(axis, nb, R(emap[1] * theta_inv)); set_where(axis, nc, R(emap[2] * theta_inv));
       }
       //
-      double halfcthh = cos(theta * onehalf) * onehalf;
+      const R halfcthh = cos(theta * onehalf) * onehalf;
       //
       // now have: halfsthh, sthhbyth, halfcthh, theta, na, nb, nc
 
-      RAJA::View<double, RAJA::Layout<2> > dqdeT(dqdeT_raw, ecmech::emapdim, ecmech::qdim);
+      RAJA::View<R, RAJA::Layout<2> > dqdeT(dqdeT_raw, ecmech::emapdim, ecmech::qdim);
 
       dqdeT(0, 0) = -halfsthh * na;
       dqdeT(1, 0) = -halfsthh * nb;
       dqdeT(2, 0) = -halfsthh * nc;
 
-      double temp = na * na;
+      R temp = na * na;
       dqdeT(0, 1) = halfcthh * temp + sthhbyth * (one - temp);
       //
       temp = nb * nb;
@@ -1677,7 +1689,7 @@ namespace ecmech {
 
       temp = halfcthh - sthhbyth;
       //
-      double tempb = temp * na * nb;
+      R tempb = temp * na * nb;
       dqdeT(1, 1) = tempb;
       dqdeT(0, 2) = tempb;
       //
@@ -1705,17 +1717,18 @@ namespace ecmech {
     * 
     * @note Less commonly used than d_rot_mat_vecd variants (those work on 5-vectors)
     */
+   template<class R, class T1>
    __ecmech_hdev__
-   inline void d_quat_to_tensor(double* const dcdq_raw, // (DIMS,DIMS,QDIM_p)
-                                const double* const quat // (QDIM_p)
+   inline void d_quat_to_tensor(R* const dcdq_raw, // (DIMS,DIMS,QDIM_p)
+                                const T1* const quat // (QDIM_p)
                                 )
    {
-      double tqa = two * quat[0];
-      double tqb = two * quat[1];
-      double tqc = two * quat[2];
-      double tqd = two * quat[3];
+      R tqa = two * quat[0];
+      R tqb = two * quat[1];
+      R tqc = two * quat[2];
+      R tqd = two * quat[3];
 
-      RAJA::View<double, RAJA::Layout<3> > dcdq(dcdq_raw, ecmech::ndim, ecmech::ndim, ecmech::qdim);
+      RAJA::View<R, RAJA::Layout<3> > dcdq(dcdq_raw, ecmech::ndim, ecmech::ndim, ecmech::qdim);
 
       // c(1,1) = x1sq+x2sq-x3sq-x4sq
       dcdq(0, 0, 0) = tqa;
@@ -1807,17 +1820,18 @@ namespace ecmech {
     * @see d_rot_mat_vecd_smop for the inverse transformation (lattice to sample)
     * @see get_rot_mat_vecd for computing the 5×5 rotation matrix itself
     */
+   template<class R, class T1, class T2>
    __ecmech_hdev__
-   inline void d_rot_mat_vecd_latop(double* const dvdc_raw, // (TVEC,DIMS,DIMS)
-                                    const double* const c, // (DIMS, DIMS)
-                                    const double* const vec_sm // (TVEC)
+   inline void d_rot_mat_vecd_latop(R* const dvdc_raw, // (TVEC,DIMS,DIMS)
+                                    const T1* const c, // (DIMS, DIMS)
+                                    const T2* const vec_sm // (TVEC)
                                     )
    {
 #include "util/mc_vars_set.h"
 #include "util/vad_vars_set.h"
 
       // include "d_Alat_dC.f90"
-      RAJA::View<double, RAJA::Layout<3> > dvdc(dvdc_raw, ecmech::ntvec, ecmech::ndim, ecmech::ndim);
+      RAJA::View<R, RAJA::Layout<3> > dvdc(dvdc_raw, ecmech::ntvec, ecmech::ndim, ecmech::ndim);
       dvdc(0, 0, 0) = c11 * va1 - c11 * sqr3 * va2 * onethird + c21 * va3 + c31 * va4;
       dvdc(1, 0, 0) = -sqr3 * (3 * c11 * va1 - c11 * sqr3 * va2 + 3 * c21 * va3 + 3 * c31 * va4) * oneninth;
       dvdc(2, 0, 0) = c12 * va1 - c12 * sqr3 * va2 * onethird + c22 * va3 + c32 * va4;
@@ -1903,16 +1917,17 @@ namespace ecmech {
     * @see d_rot_mat_vecd_latop for deviatoric tensor version
     * @see skewToVeccp for converting skew matrix to axial vector
     */
+   template<class R, class T2>
    __ecmech_hdev__
-   inline void d_rot_mat_wveccp_latop(double* const dvdc_raw, // (WVEC,DIMS,DIMS)
-                                      // const double* const c, // (DIMS, DIMS) // not used
-                                      const double* const cmv3w // (WVEC) // vec_sm(WVEC)
+   inline void d_rot_mat_wveccp_latop(R* const dvdc_raw, // (WVEC,DIMS,DIMS)
+                                      // const T1* const c, // (DIMS, DIMS) // not used
+                                      const T2* const cmv3w // (WVEC) // vec_sm(WVEC)
                                       )
    {
 #include "util/vw_vars_set.h"
 
       // include "d_Wlat_dC.f90"
-      RAJA::View<double, RAJA::Layout<3> > dvdc(dvdc_raw, ecmech::nwvec, ecmech::ndim, ecmech::ndim);
+      RAJA::View<R, RAJA::Layout<3> > dvdc(dvdc_raw, ecmech::nwvec, ecmech::ndim, ecmech::ndim);
 
       dvdc(0, 0, 0) = vw1;
       dvdc(1, 0, 0) = zero;
@@ -2011,24 +2026,25 @@ namespace ecmech {
     * @see d_rot_mat_wveccp_latop for spin rotation derivatives
     * @see get_c_quat for quaternion composition
     */
+   template<class R, class T1, class T2, class T3, class T4, class T5, class T6>
    __ecmech_hdev__
    inline
-   void eval_d_dxi_impl_quat(double* const dxtal_ori_quat_dxi_T, // (WVEC,QDIM_p)
-                             // double* const dxtal_rmat_dxi, // (DIMS,DIMS,WVEC)
-                             double* const dDapp_dxi, // dDapp_dxi(TVEC, WVEC)
-                             double* const dWapp_dxi, // dWapp_dxi(WVEC, WVEC)
-                             const double* const def_rate_d5_sample, // (TVEC), or (SVEC) is fine too
-                             const double* const w_vec_sm, // (WVEC)
-                             const double* const xi, // (WVEC)
-                             const double* const xtal_ori_quat_n, // (QDIM_p)
-                             const double* const xtal_rmat, // (DIMS,DIMS)
-                             const double* const xtal_ori_quat // (QDIM_p)
-                             // const double* const A_quat // (QDIM_p) // not used
+   void eval_d_dxi_impl_quat(R* const dxtal_ori_quat_dxi_T, // (WVEC,QDIM_p)
+                             // R* const dxtal_rmat_dxi, // (DIMS,DIMS,WVEC)
+                             R* const dDapp_dxi, // dDapp_dxi(TVEC, WVEC)
+                             R* const dWapp_dxi, // dWapp_dxi(WVEC, WVEC)
+                             const T1* const def_rate_d5_sample, // (TVEC), or (SVEC) is fine too
+                             const T2* const w_vec_sm, // (WVEC)
+                             const T3* const xi, // (WVEC)
+                             const T4* const xtal_ori_quat_n, // (QDIM_p)
+                             const T5* const xtal_rmat, // (DIMS,DIMS)
+                             const T6* const xtal_ori_quat // (QDIM_p)
+                             // const T6* const A_quat // (QDIM_p) // not used
                              ) {
       // working with quats, so do not call eval_d_cA_dxi(dc_dxi, dA_dxi, xi, c_n)
       //
       {
-         double dA_quat_dxi_T[ ecmech::ndim * ecmech::qdim ]; // (QDIM_p,DIMS)^T
+         R dA_quat_dxi_T[ ecmech::ndim * ecmech::qdim ]; // (QDIM_p,DIMS)^T
          dquat_demap_T(dA_quat_dxi_T, xi);
 
          // can get away with these three calls as quat_prod is bilinear in the input arguments
@@ -2039,16 +2055,16 @@ namespace ecmech {
       }
       // now have dxtal_ori_quat_dxi
 
-      double dxtal_rmat_dxi[ (ecmech::ndim * ecmech::ndim) *ecmech::nwvec ]; // (DIMS,DIMS,WVEC)
+      R dxtal_rmat_dxi[ (ecmech::ndim * ecmech::ndim) *ecmech::nwvec ]; // (DIMS,DIMS,WVEC)
       {
-         double dCmatx_dq[ (ecmech::ndim * ecmech::ndim) *ecmech::qdim ]; // (DIMS,DIMS,QDIM_p)
+         R dCmatx_dq[ (ecmech::ndim * ecmech::ndim) *ecmech::qdim ]; // (DIMS,DIMS,QDIM_p)
          // get dxtal_rmat_dxi
          d_quat_to_tensor(dCmatx_dq, xtal_ori_quat);
          vecsMABT<ndim*ndim, nwvec, qdim>(dxtal_rmat_dxi, dCmatx_dq, dxtal_ori_quat_dxi_T); // vecsMABT because _T on dxtal_ori_quat_dxi_T
       }
 
       {
-         double dD_dxtal_rmat[ ecmech::ntvec * (ecmech::ndim * ecmech::ndim) ];
+         R dD_dxtal_rmat[ ecmech::ntvec * (ecmech::ndim * ecmech::ndim) ];
          d_rot_mat_vecd_latop(dD_dxtal_rmat, xtal_rmat, def_rate_d5_sample);
          //
          vecsMAB<ntvec, nwvec, ndim*ndim>(dDapp_dxi, dD_dxtal_rmat, dxtal_rmat_dxi);
@@ -2056,7 +2072,7 @@ namespace ecmech {
       }
 
       {
-         double dW_dxtal_rmat[ ecmech::nwvec * (ecmech::ndim * ecmech::ndim) ]; // (WVEC,DIMS,DIMS)
+         R dW_dxtal_rmat[ ecmech::nwvec * (ecmech::ndim * ecmech::ndim) ]; // (WVEC,DIMS,DIMS)
          d_rot_mat_wveccp_latop(dW_dxtal_rmat, // xtal_rmat,
                                 w_vec_sm);
          //
@@ -2100,11 +2116,11 @@ namespace ecmech {
     * @see d_rot_mat_vecd_latop for the inverse transformation (sample to lattice)
     * @see get_rot_mat_vecd for computing the 5×5 rotation matrix itself
     */
+   template<class R, class T1, class T2>
    __ecmech_hdev__
-   inline void
-   d_rot_mat_vecd_smop(double* const dvdc_raw, // (TVEC,DIMS,DIMS)
-                       const double* const c, // (DIMS, DIMS)
-                       const double* const vec_lat // (TVEC)
+   inline void d_rot_mat_vecd_smop(R* const dvdc_raw, // (TVEC,DIMS,DIMS)
+                       const T1* const c, // (DIMS, DIMS)
+                       const T2* const vec_lat // (TVEC)
                        )
    {
       //
@@ -2118,7 +2134,7 @@ namespace ecmech {
 #include "util/vadl_vars_set.h"
 
       // include "d_Asm_dC.f90"
-      RAJA::View<double, RAJA::Layout<3> > dvdc(dvdc_raw, ecmech::ntvec, ecmech::ndim, ecmech::ndim);
+      RAJA::View<R, RAJA::Layout<3> > dvdc(dvdc_raw, ecmech::ntvec, ecmech::ndim, ecmech::ndim);
       dvdc(0, 0, 0) = c11 * va1 - c11 * sqr3 * va2 * onethird + c12 * va3 + c13 * va4;
       dvdc(1, 0, 0) = sqr3 * (-3 * c11 * va1 + sqr3 * c11 * va2 - 3 * c12 * va3 - 3 * c13 * va4) * oneninth;
       dvdc(2, 0, 0) = c21 * va1 - c21 * sqr3 * va2 * onethird + c22 * va3 + c23 * va4;
@@ -2215,12 +2231,11 @@ namespace ecmech {
     * @see get_rot_mat_vecd for computing qr5x5 from rotation matrix
     * @see mtan_conv_sd_svec for converting tangent representations
     */
-   template<int n, bool l_T>
+   template<int n, bool l_T, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void
-   qr6x6_pre_mul(double* const M_out, // 6xn
-                 const double* const M_in, // 6xn
-                 const double* const qr5x5 // 5x5
+   inline void qr6x6_pre_mul(R* const M_out, // 6xn
+                 const T1* const M_in, // 6xn
+                 const T2* const qr5x5 // 5x5
                  )
    {
       for (int iM = 0; iM<ecmech::ntvec; ++iM) { // only up to ntvec on purpose !

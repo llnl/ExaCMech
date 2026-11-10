@@ -80,8 +80,8 @@
  * @see mc_vars_set.h for rotation matrix components
  */
 
-double vb1 = cmv6b[0];
-double vb2 = cmv6b[1];
-double vb3 = cmv6b[2];
-double vb4 = cmv6b[3];
-double vb5 = cmv6b[4];
+auto vb1 = cmv6b[0];
+auto vb2 = cmv6b[1];
+auto vb3 = cmv6b[2];
+auto vb4 = cmv6b[3];
+auto vb5 = cmv6b[4];

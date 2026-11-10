@@ -85,6 +85,6 @@
  * @see mc_vars_set.h for rotation matrix components
  */
 
-double vw1 = cmv3w[0];
-double vw2 = cmv3w[1];
-double vw3 = cmv3w[2];
+auto vw1 = cmv3w[0];
+auto vw2 = cmv3w[1];
+auto vw3 = cmv3w[2];

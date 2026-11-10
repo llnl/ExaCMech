@@ -132,10 +132,60 @@ namespace ecmech {
        * @see EvptnUpdstProblem::computeRJ() for the core evaluation method
        * @see getResponseSngl() for high-level usage
        */
+      /// Value type of a problem state: double for ProblemState (one point);
+      /// a pack state declares value_type.
+      template<class PS, class = void>
+      struct problem_state_value { using type = double; };
+      template<class PS>
+      struct problem_state_value<PS, std::void_t<typename PS::value_type>> { using type = typename PS::value_type; };
+
+      /// Kinetics::getVals for value type R: the kinetics' own scalar
+      /// function, point by point for a pack.
+      template<class K, class R>
+      __ecmech_hdev__
+      inline R kinetic_values(const K& k, R* const vals, const R& pressure, const R& tkelv, const R* const h_state)
+      {
+         if constexpr (lanes_of<R>() == 1) {
+            return k.getVals(vals, pressure, tkelv, h_state);
+         }
+         else {
+            R scale;
+            for (int l = 0; l < lanes_of<R>(); ++l) {
+               double v[K::nVals];
+               double h[(K::nH > 0) ? K::nH : 1];
+               for (int j = 0; j < K::nH; ++j) { h[j] = lane(h_state[j], l); }
+               set_lane(scale, l, k.getVals(v, lane(pressure, l), lane(tkelv, l), h));
+               for (int j = 0; j < K::nVals; ++j) { set_lane(vals[j], l, v[j]); }
+            }
+            return scale;
+         }
+      }
+
+      /// Kinetics::getFixedRefRate for value type R (point by point for a pack)
+      template<class K, class R>
+      __ecmech_hdev__
+      inline R fixed_ref_rate(const K& k, const R* const vals)
+      {
+         if constexpr (lanes_of<R>() == 1) {
+            return k.getFixedRefRate(vals);
+         }
+         else {
+            R rate;
+            for (int l = 0; l < lanes_of<R>(); ++l) {
+               double v[K::nVals];
+               for (int j = 0; j < K::nVals; ++j) { v[j] = lane(vals[j], l); }
+               set_lane(rate, l, k.getFixedRefRate(v));
+            }
+            return rate;
+         }
+      }
+
       template<class SlipGeom, class Kinetics, class ThermoElastN, class ProblemState>
       class EvptnUpdstProblem
       {
          public:
+            /// value type: double for one point, a pack for the SIMD path
+            using R = typename problem_state_value<ProblemState>::type;
            /**
             * @brief Total system dimension: elastic strain + rotation.
             * Value: ntvec + nwvec = 5 + 3 = 8 unknowns
@@ -200,15 +250,17 @@ namespace ecmech {
                m_spin_vec_sample(prob_state.spin_vec_sample), // vel_grad_sm%w_veccp
                m_mtan_sI(nullptr)
             {
-               m_hdn_scale = m_kinetics.getVals(m_kin_vals, prob_state.pressure_EOS, prob_state.tkelv, prob_state.h_state_u);
+               m_hdn_scale = kinetic_values(m_kinetics, m_kin_vals, prob_state.pressure_EOS, prob_state.tkelv, prob_state.h_state_u);
 
-               double adots_ref = m_kinetics.getFixedRefRate(m_kin_vals);
-               double eff = vecNorm<ntvec>(m_def_rate_d5_sample); // do not worry about factor of sqrt(twothird)
-               if (eff < epsdot_scl_nzeff * adots_ref) {
-                  m_epsdot_scale_inv = one / adots_ref;
+               const R adots_ref = fixed_ref_rate(m_kinetics, m_kin_vals);
+               const R eff = vecNorm<ntvec>(m_def_rate_d5_sample); // do not worry about factor of sqrt(twothird)
+               m_epsdot_scale_inv = zero;
+               const auto lowRate = (eff < epsdot_scl_nzeff * adots_ref);
+               if (any(lowRate)) {
+                  set_where(lowRate, m_epsdot_scale_inv, R(one / adots_ref));
                }
-               else {
-                  m_epsdot_scale_inv = fmin(one / eff, 1e6 * m_lattice_strain_prob.m_dt);
+               if (any(!lowRate)) {
+                  set_where(!lowRate, m_epsdot_scale_inv, R(fmin(one / eff, R(1e6 * m_lattice_strain_prob.m_dt))));
                }
                //
                m_rotincr_scale_inv = m_lattice_strain_prob.m_inv_dt * m_epsdot_scale_inv;
@@ -233,7 +285,7 @@ namespace ecmech {
             */
             __ecmech_hdev__
             inline
-            void provideMTan(double* mtan_sI) { m_mtan_sI = mtan_sI; }
+            void provideMTan(R* mtan_sI) { m_mtan_sI = mtan_sI; }
 
            /**
             * @brief Disable material tangent stiffness computation.
@@ -266,7 +318,7 @@ namespace ecmech {
             */
             __ecmech_hdev__
             inline
-            double getHdnScale() const { return m_hdn_scale; }
+            R getHdnScale() const { return m_hdn_scale; }
 
            /**
             * @brief Reconstruct physical state from solution vector.
@@ -294,9 +346,9 @@ namespace ecmech {
             */
             __ecmech_hdev__
             inline
-            void stateFromX(double* const elast_dev_press_vec,
-                            double* const quat,
-                            const double* const x) {
+            void stateFromX(R* const elast_dev_press_vec,
+                            R* const quat,
+                            const R* const x) {
                m_lattice_strain_prob.stateFromX(elast_dev_press_vec,  &(x[m_i_sub_e]));
                m_lattice_rot_prob.stateFromX(quat,  &(x[m_i_sub_r]));
             }
@@ -312,8 +364,8 @@ namespace ecmech {
             */
             __ecmech_hdev__
             inline
-            void elastNEtoC(double* const cauchy_xtal, // nsvec
-                            const double* const elast_d5_f // ntvec
+            void elastNEtoC(R* const cauchy_xtal, // nsvec
+                            const R* const elast_d5_f // ntvec
                             ) const {
                m_lattice_strain_prob.elast_strain_to_cauchy_stress(cauchy_xtal, elast_d5_f);
             }
@@ -384,9 +436,9 @@ namespace ecmech {
             */
             __ecmech_hdev__
             inline
-            bool computeRJ(double* const resid,
-                           double* const Jacobian,
-                           const double* const x) {
+            bool computeRJ(R* const resid,
+                           R* const Jacobian,
+                           const R* const x) {
                bool doComputeJ = (Jacobian != nullptr);
 
                if (doComputeJ) {
@@ -405,42 +457,42 @@ namespace ecmech {
                //////////////////////////////
                // PULL VALUES out of x, with scalings
                //
-               double elast_dt_d5[ecmech::ntvec];
+               R elast_dt_d5[ecmech::ntvec];
                vecsVxa<ntvec>(elast_dt_d5, ecmech::e_scale, &(x[m_i_sub_e]) ); // elast_dt_d5 is now the delta, _not_ yet elast_dt_d5
                // elast_d5_f is end-of-step
-               double elast_d5_f[ntvec];
+               R elast_d5_f[ntvec];
                vecsVapb<ntvec>(elast_d5_f, elast_dt_d5, m_lattice_strain_prob.m_elast_d5_n);
                vecsVsa<ntvec>(elast_dt_d5, m_lattice_strain_prob.m_inv_dt); // _now_ elast_dt_d5 has elast_dt_d5
                //
-               double xi_f[nwvec];
+               R xi_f[nwvec];
                vecsVxa<nwvec>(xi_f, ecmech::r_scale, &(x[m_i_sub_r]) );
 
-               double A_quat[ecmech::qdim];
+               R A_quat[ecmech::qdim];
                emap_to_quat(A_quat, xi_f);
                //
-               double xtal_ori_quat[ecmech::qdim];
+               R xtal_ori_quat[ecmech::qdim];
                get_c_quat(xtal_ori_quat, A_quat, m_lattice_rot_prob.m_xtal_ori_quat_n);
                //
-               double xtal_rmat[ecmech::ndim * ecmech::ndim];
+               R xtal_rmat[ecmech::ndim * ecmech::ndim];
                quat_to_tensor(xtal_rmat, xtal_ori_quat);
                //
-               double rmat_5x5_sample2xtal[ecmech::ntvec * ecmech::ntvec];
+               R rmat_5x5_sample2xtal[ecmech::ntvec * ecmech::ntvec];
                get_rot_mat_vecd(rmat_5x5_sample2xtal, xtal_rmat);
 
-               double def_rate_d5_xtal[ecmech::ntvec];
-               double spin_vec_xtal[ecmech::nwvec]; // assumes nwvec = ndim
+               R def_rate_d5_xtal[ecmech::ntvec];
+               R spin_vec_xtal[ecmech::nwvec]; // assumes nwvec = ndim
 
                get_xtal_frame_vel_grad_terms(def_rate_d5_xtal, spin_vec_xtal, m_def_rate_d5_sample,  m_spin_vec_sample, xtal_rmat, rmat_5x5_sample2xtal);
 
                //////////////////////////////
                // CALCULATIONS
 
-               double kirchoff[ecmech::nsvec];
+               R kirchoff[ecmech::nsvec];
                m_lattice_strain_prob.elast_strain_to_kirchoff_stress(kirchoff, elast_d5_f);
 
-               double dgdot_dtau[SlipGeom::nslip] = { 0.0 }; // crys%tmp2_slp
-               double plastic_def_rate_d5[ecmech::ntvec] = { 0.0 };
-               double plastic_spin_vec[ecmech::nwvec] = { 0.0 }; // \pcDhat
+               R dgdot_dtau[SlipGeom::nslip] = { 0.0 }; // crys%tmp2_slp
+               R plastic_def_rate_d5[ecmech::ntvec] = { 0.0 };
+               R plastic_spin_vec[ecmech::nwvec] = { 0.0 }; // \pcDhat
 
                // The kinetics (slip rates and their derivatives) are the
                // expensive part of this evaluation. After the solve, the
@@ -451,7 +503,7 @@ namespace ecmech {
                // recomputes them.
                bool reuse = m_kc_on && m_kc_valid;
                for (int iX = 0; reuse && iX < nDimSys; ++iX) {
-                  reuse = (x[iX] == m_kc_x[iX]);
+                  reuse = all(x[iX] == m_kc_x[iX]);
                }
                if (reuse) {
                   for (int i = 0; i < SlipGeom::nslip; ++i) { dgdot_dtau[i] = m_kc_dgdot_dtau[i]; }
@@ -472,9 +524,9 @@ namespace ecmech {
                }
 
                // Higher-order terms related to the elasticity stuff that's used in the residuals and jacobian calculation
-               double A_e_M35[ecmech::nwvec * ecmech::ntvec];
-               double ee_wvec[ecmech::nwvec];
-               double ee_fac;
+               R A_e_M35[ecmech::nwvec * ecmech::ntvec];
+               R ee_wvec[ecmech::nwvec];
+               R ee_fac;
                elasticity_higher_order_terms(A_e_M35, ee_wvec, ee_fac, m_lattice_strain_prob.m_inv_a_vol, elast_d5_f, elast_dt_d5);
 
                // Residual Calculations
@@ -491,14 +543,14 @@ namespace ecmech {
                   //
                   // preliminaries
                   //
-                  double dpl_deps_symm[ ecmech::ntvec * ecmech::ntvec ] = { 0.0 };
-                  double dpl_deps_skew[ ecmech::nwvec * ecmech::ntvec ] = { 0.0 };
+                  R dpl_deps_symm[ ecmech::ntvec * ecmech::ntvec ] = { 0.0 };
+                  R dpl_deps_skew[ ecmech::nwvec * ecmech::ntvec ] = { 0.0 };
                   get_slip_rate_deriv_terms(dpl_deps_symm, dpl_deps_skew, dgdot_dtau, m_lattice_strain_prob.m_inv_a_vol, m_slipGeom, m_lattice_strain_prob.m_thermo_elast_n);
 
                   // derivatives with respect to lattice orientation changes
-                  double dxtal_ori_quat_dxi_T[ ecmech::nwvec * ecmech::qdim ];
-                  double dDsm_dxi[ ecmech::ntvec * ecmech::nwvec ];
-                  double dWsm_dxi[ ecmech::nwvec * ecmech::nwvec ];
+                  R dxtal_ori_quat_dxi_T[ ecmech::nwvec * ecmech::qdim ];
+                  R dDsm_dxi[ ecmech::ntvec * ecmech::nwvec ];
+                  R dWsm_dxi[ ecmech::nwvec * ecmech::nwvec ];
                   eval_d_dxi_impl_quat(dxtal_ori_quat_dxi_T, dDsm_dxi, dWsm_dxi,
                                        m_def_rate_d5_sample, m_spin_vec_sample,
                                        xi_f, 
@@ -520,14 +572,14 @@ namespace ecmech {
                   m_lattice_rot_prob.template get_deriv_omega_wrt_omega<nDimSys>(Jacobian, dWsm_dxi);
 
                   if (m_mtan_sI) {
-                     double cauchy_stress_lattice[ ecmech::nsvec ];
+                     R cauchy_stress_lattice[ ecmech::nsvec ];
                      m_lattice_strain_prob.m_thermo_elast_n.getCauchy(cauchy_stress_lattice, kirchoff, m_lattice_strain_prob.m_inv_det_v_e);
                      // plastic-rate sensitivities to the spherical elastic strain,
                      // for the volumetric column of the consistent tangent
-                     double elast_d5v[ ecmech::nsvec ];
+                     R elast_d5v[ ecmech::nsvec ];
                      m_lattice_strain_prob.get_scaled_elast_strain_vec(elast_d5v, elast_d5_f);
-                     double dDp_hat_deps_sph[ ecmech::ntvec ];
-                     double dWp_hat_deps_sph[ ecmech::nwvec ];
+                     R dDp_hat_deps_sph[ ecmech::ntvec ];
+                     R dWp_hat_deps_sph[ ecmech::nwvec ];
                      get_slip_rate_deriv_sph_terms(dDp_hat_deps_sph, dWp_hat_deps_sph, dgdot_dtau,
                                                    elast_d5v, m_lattice_strain_prob.m_energy_vol_ref,
                                                    m_slipGeom, m_lattice_strain_prob.m_thermo_elast_n);
@@ -546,7 +598,7 @@ namespace ecmech {
 
                   // SCALING
                   {
-                     double scaleFactorJ;
+                     R scaleFactorJ;
                      for (size_t iJ = 0; iJ<m_i_sub_r; ++iJ) {
                         // Jacobian(i_sub_e:i_sup_e,i_sub_e:i_sup_e) = jacob_ee * epsdot_scale_inv  * e_scale ! resid, x
                         scaleFactorJ = m_epsdot_scale_inv * ecmech::e_scale;
@@ -602,17 +654,17 @@ namespace ecmech {
             */
             __ecmech_hdev__
             inline
-            void get_slip_contribution(double& pl_disipation_rate,
-                                       double& effective_shear_rate,
-                                       double* const gdot,
-                                       const double* const elast_strain
+            void get_slip_contribution(R& pl_disipation_rate,
+                                       R& effective_shear_rate,
+                                       R* const gdot,
+                                       const R* const elast_strain
                                       )
             {
                // Reuse the last kinetics evaluation if it was at this elastic
                // strain (the converged state); same values as recomputing.
                bool reuse = m_kc_on && m_kc_valid;
                for (int i = 0; reuse && i < ecmech::ntvec; ++i) {
-                  reuse = (elast_strain[i] == m_kc_elast[i]);
+                  reuse = all(elast_strain[i] == m_kc_elast[i]);
                }
                if (reuse) {
                   pl_disipation_rate = 0.0;
@@ -640,21 +692,21 @@ namespace ecmech {
             /** @brief Reference to kinetics object */
             const Kinetics &m_kinetics;
             /** @brief Elastic strain subproblem instance */
-            const EvptnLatticeStrainProblem<ThermoElastN> m_lattice_strain_prob;
+            const EvptnLatticeStrainProblem<ThermoElastN, R> m_lattice_strain_prob;
             /** @brief Lattice rotation subproblem instance */
-            const EvptnLatticeRotationProblem<ecmech::ntvec> m_lattice_rot_prob;
+            const EvptnLatticeRotationProblem<ecmech::ntvec, R> m_lattice_rot_prob;
             /** @brief Hardening scale factor [stress units] */
-            double m_hdn_scale;
+            R m_hdn_scale;
             /** @brief Inverse strain rate scaling [time] */
-            double m_epsdot_scale_inv;
+            R m_epsdot_scale_inv;
             /** @brief Inverse rotation increment scaling [time] */
-            double m_rotincr_scale_inv;
+            R m_rotincr_scale_inv;
             /** @brief Kinetic state values array [Kinetics::nVals components] */
-            double m_kin_vals[Kinetics::nVals];
+            R m_kin_vals[Kinetics::nVals];
             /** @brief Prescribed deformation rate in sample frame [ntvec] */
-            const double* const m_def_rate_d5_sample;
+            const R* const m_def_rate_d5_sample;
             /** @brief Prescribed spin in sample frame [nwvec] */
-            const double* const m_spin_vec_sample;
+            const R* const m_spin_vec_sample;
             /** @brief Jacobian size (nDimSys squared) */
             static constexpr size_t m_nXnDim = nDimSys * nDimSys;
             /** @brief Starting index for elastic strain unknowns */
@@ -662,7 +714,7 @@ namespace ecmech {
             /** @brief Starting index for rotation unknowns */
             static constexpr size_t m_i_sub_r = ecmech::ntvec;
             /** @brief Pointer to material tangent stiffness (nullptr if not computing) */
-            double* m_mtan_sI;
+            R* m_mtan_sI;
 
             // Kinetics results of the most recent computeRJ (see computeRJ).
             // On unless the kinetics opts out (Kinetics::reuseEvaluations) or
@@ -675,13 +727,13 @@ namespace ecmech {
 #endif
             static constexpr size_t m_nslip_dyn = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
             bool m_kc_valid = false;
-            double m_kc_x[(m_kc_on && (nDimSys) > 0) ? (nDimSys) : 1];
-            double m_kc_elast[(m_kc_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
-            double m_kc_dgdot_dtau[(m_kc_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
-            double m_kc_gdot[(m_kc_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
-            double m_kc_rss[(m_kc_on && (m_nslip_dyn) > 0) ? (m_nslip_dyn) : 1];
-            double m_kc_pl_d5[(m_kc_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
-            double m_kc_pl_spin[(m_kc_on && (ecmech::nwvec) > 0) ? (ecmech::nwvec) : 1];
+            R m_kc_x[(m_kc_on && (nDimSys) > 0) ? (nDimSys) : 1];
+            R m_kc_elast[(m_kc_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
+            R m_kc_dgdot_dtau[(m_kc_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
+            R m_kc_gdot[(m_kc_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
+            R m_kc_rss[(m_kc_on && (m_nslip_dyn) > 0) ? (m_nslip_dyn) : 1];
+            R m_kc_pl_d5[(m_kc_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
+            R m_kc_pl_spin[(m_kc_on && (ecmech::nwvec) > 0) ? (ecmech::nwvec) : 1];
       }; // class EvptnUpdstProblem
 
 #if defined(ECMECH_EXTRA_SOLVERS)

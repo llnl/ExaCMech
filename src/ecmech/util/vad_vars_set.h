@@ -72,8 +72,8 @@
  * @see vw_vars_set.h for spin vector components
  */
 
-double va1 = vec_sm[0];
-double va2 = vec_sm[1];
-double va3 = vec_sm[2];
-double va4 = vec_sm[3];
-double va5 = vec_sm[4];
+auto va1 = vec_sm[0];
+auto va2 = vec_sm[1];
+auto va3 = vec_sm[2];
+auto va4 = vec_sm[3];
+auto va5 = vec_sm[4];

@@ -100,14 +100,15 @@ namespace evptn {
      * @see quat_to_tensor() for generating xtal_rmat from quaternion
      * @see get_rot_mat_vecd() for generating xtal_rot_mat5 from 3×3 rotation
      */
+    template<class R, class T1, class T2, class T3, class T4>
     __ecmech_hdev__
     inline
-    void get_xtal_frame_vel_grad_terms(double* const def_rate_d5_xtal,
-                                        double* const spin_vec_xtal,
-                                        const double* const def_rate_d5_sample,
-                                        const double* const spin_vec_sample,
-                                        const double* const xtal_rmat,
-                                        const double* const xtal_rot_mat5)
+    void get_xtal_frame_vel_grad_terms(R* const def_rate_d5_xtal,
+                                        R* const spin_vec_xtal,
+                                        const T1* const def_rate_d5_sample,
+                                        const T2* const spin_vec_sample,
+                                        const T3* const xtal_rmat,
+                                        const T4* const xtal_rot_mat5)
     {
         vecsVMTa<ecmech::ntvec>(def_rate_d5_xtal, xtal_rot_mat5, def_rate_d5_sample);
         vecsVMTa<ecmech::ndim>(spin_vec_xtal, xtal_rmat, spin_vec_sample);
@@ -161,25 +162,25 @@ namespace evptn {
      * @see slip_geom.evalRSS() for resolved shear stress calculation
      * @see slip_kinetics.evalGdots() for slip rate evaluation
      */
-    template<class SlipGeom, class SlipKinetics>
+    template<class SlipGeom, class SlipKinetics, class R, class T1, class T2>
     __ecmech_hdev__
     inline
-    void get_slip_rate_terms(double* const dgdot_dtau,
-                            double* const plastic_def_rate_d5,
-                            double* const plastic_spin_vec,
-                            const double* const kirchoff,
-                            const double* const kinetic_values,
+    void get_slip_rate_terms(R* const dgdot_dtau,
+                            R* const plastic_def_rate_d5,
+                            R* const plastic_spin_vec,
+                            const T1* const kirchoff,
+                            const T2* const kinetic_values,
                             const SlipGeom& slip_geom,
                             const SlipKinetics& slip_kinetics,
-                            double* const gdot_out = nullptr,
-                            double* const rss_out = nullptr
+                            R* const gdot_out = nullptr,
+                            R* const rss_out = nullptr
                             )
     {        
         if constexpr (SlipGeom::nslip > 0) {
         // default initialize everything to 0.0
         constexpr size_t nslip_dyn = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
-        double abs_resolved_shear_stress[nslip_dyn] = {};
-        double gdot[SlipGeom::nslip] = {};
+        R abs_resolved_shear_stress[nslip_dyn] = {};
+        R gdot[SlipGeom::nslip] = {};
         // resolve stress onto slip systems
         // CALL resolve_tau_a_n(crys%tmp4_slp, s_meas%kirchoff, crys)
         //vecsVaTM<ntvec, SlipGeom::nslip>(taua, kirchoff, slipP);
@@ -267,13 +268,13 @@ namespace evptn {
     struct has_dTdepsDiag<T, std::void_t<decltype(std::declval<const T&>().dTdepsDiag(std::declval<double*>(), 0.0))>>
         : std::true_type {};
 
-    template<class SlipGeom, class ThermoElastN>
+    template<class SlipGeom, class ThermoElastN, class R, class T1, class T2>
     __ecmech_hdev__
     inline
-    void get_slip_rate_deriv_terms(double* const dDp_hat_delast_strain,
-                                    double* const dWp_hat_delast_strain,
-                                    const double* const dgdot_dtau,
-                                    const double inv_a_vol,
+    void get_slip_rate_deriv_terms(R* const dDp_hat_delast_strain,
+                                    R* const dWp_hat_delast_strain,
+                                    const T1* const dgdot_dtau,
+                                    const T2 inv_a_vol,
                                     const SlipGeom& slip_geom,
                                     const ThermoElastN& thermoElastN
                                 )
@@ -288,35 +289,35 @@ namespace evptn {
             // dgdot_deps temporaries, and only the 15 unique M entries.
             // Same values as below up to rounding (different association).
             constexpr int ns = SlipGeom::nslip;
-            double d[ecmech::ntvec];
+            R d[ecmech::ntvec];
             thermoElastN.dTdepsDiag(d, inv_a_vol);
-            const double* const P = slip_geom.getP();
-            const double* const Q = slip_geom.getQ();
+            const R* const P = slip_geom.getP();
+            const R* const Q = slip_geom.getQ();
             for (int iT = 0; iT < ecmech::ntvec; ++iT) {
-                double pw[ns];
+                R pw[ns];
                 for (int s = 0; s < ns; ++s) { pw[s] = P[ECMECH_NM_INDX(iT, s, ecmech::ntvec, ns)] * dgdot_dtau[s]; }
                 for (int jT = iT; jT < ecmech::ntvec; ++jT) {
-                    double m = 0.0;
+                    R m = 0.0;
                     for (int s = 0; s < ns; ++s) { m += pw[s] * P[ECMECH_NM_INDX(jT, s, ecmech::ntvec, ns)]; }
                     dDp_hat_delast_strain[ECMECH_NM_INDX(iT, jT, ecmech::ntvec, ecmech::ntvec)] = d[jT] * m;
                     dDp_hat_delast_strain[ECMECH_NM_INDX(jT, iT, ecmech::ntvec, ecmech::ntvec)] = d[iT] * m;
                 }
             }
             for (int iW = 0; iW < ecmech::nwvec; ++iW) {
-                double qw[ns];
+                R qw[ns];
                 for (int s = 0; s < ns; ++s) { qw[s] = Q[ECMECH_NM_INDX(iW, s, ecmech::nwvec, ns)] * dgdot_dtau[s]; }
                 for (int jT = 0; jT < ecmech::ntvec; ++jT) {
-                    double m = 0.0;
+                    R m = 0.0;
                     for (int s = 0; s < ns; ++s) { m += qw[s] * P[ECMECH_NM_INDX(jT, s, ecmech::ntvec, ns)]; }
                     dWp_hat_delast_strain[ECMECH_NM_INDX(iW, jT, ecmech::nwvec, ecmech::ntvec)] = d[jT] * m;
                 }
             }
             return;
         }
-        double dtaua_deps[ ecmech::ntvec * SlipGeom::nslip ];
+        R dtaua_deps[ ecmech::ntvec * SlipGeom::nslip ];
         thermoElastN.multDTDepsT(dtaua_deps, slip_geom.getP(), inv_a_vol, SlipGeom::nslip);
 
-        double dgdot_deps[ ecmech::ntvec * SlipGeom::nslip ];
+        R dgdot_deps[ ecmech::ntvec * SlipGeom::nslip ];
         for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
             for (int iSlip = 0; iSlip < SlipGeom::nslip; ++iSlip) {
                 int ijThis = ECMECH_NM_INDX(iTvec, iSlip, ecmech::ntvec, SlipGeom::nslip);
@@ -356,14 +357,14 @@ namespace evptn {
      * @see get_slip_rate_deriv_terms() for the deviatoric analogue
      * @see ThermoElastNHexag::getDTDepsSph() for the sensitivity vector
      */
-    template<class SlipGeom, class ThermoElastN>
+    template<class SlipGeom, class ThermoElastN, class R, class T1, class T2, class T3>
     __ecmech_hdev__
     inline
-    void get_slip_rate_deriv_sph_terms(double* const dDp_hat_deps_sph,
-                                       double* const dWp_hat_deps_sph,
-                                       const double* const dgdot_dtau,
-                                       const double* const elast_dev_press_vec,
-                                       const double energy_vol_ref,
+    void get_slip_rate_deriv_sph_terms(R* const dDp_hat_deps_sph,
+                                       R* const dWp_hat_deps_sph,
+                                       const T1* const dgdot_dtau,
+                                       const T2* const elast_dev_press_vec,
+                                       const T3 energy_vol_ref,
                                        const SlipGeom& slip_geom,
                                        const ThermoElastN& thermoElastN
                                     )
@@ -374,15 +375,15 @@ namespace evptn {
         for (int iWvec = 0; iWvec < ecmech::nwvec; ++iWvec) {
             dWp_hat_deps_sph[iWvec] = 0.0;
         }
-        double dT_deps_sph[ecmech::ntvec];
+        R dT_deps_sph[ecmech::ntvec];
         if (!thermoElastN.getDTDepsSph(dT_deps_sph, elast_dev_press_vec, energy_vol_ref)) {
             return;
         }
         if constexpr (SlipGeom::nslip > 0) {
-        double dgdot_deps_sph[SlipGeom::nslip];
-        const double* const slipP = slip_geom.getP();
+        R dgdot_deps_sph[SlipGeom::nslip];
+        const R* const slipP = slip_geom.getP();
         for (int iSlip = 0; iSlip < SlipGeom::nslip; ++iSlip) {
-            double dtaua_deps_sph = 0.0;
+            R dtaua_deps_sph = 0.0;
             for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                 dtaua_deps_sph += slipP[ECMECH_NM_INDX(iTvec, iSlip, ecmech::ntvec, SlipGeom::nslip)] * dT_deps_sph[iTvec];
             }
@@ -458,15 +459,15 @@ namespace evptn {
      * @see vecd_Deff() for tensor-based effective rate calculation
      * @see vecsssumabs() for sum of absolute values
      */
-    template<class SlipGeom, class SlipKinetics, class Elasticty>
+    template<class SlipGeom, class SlipKinetics, class Elasticty, class R, class T1, class T2, class T3>
     __ecmech_hdev__
     inline
-    void get_slip_contributions(double& pl_disipation_rate,
-                                double& effective_shear_rate,
-                                double* const gdot,
-                                const double inv_det_v_e,
-                                const double* const elast_strain,
-                                const double* const kinetic_values,
+    void get_slip_contributions(R& pl_disipation_rate,
+                                R& effective_shear_rate,
+                                R* const gdot,
+                                const T1 inv_det_v_e,
+                                const T2* const elast_strain,
+                                const T3* const kinetic_values,
                                 const SlipGeom& slip_geom,
                                 const SlipKinetics& slip_kinetics,
                                 const Elasticty& elasticity
@@ -477,9 +478,9 @@ namespace evptn {
         if constexpr (SlipGeom::nslip > 0) {
         // default initialize everything to 0.0 
         constexpr size_t nslip_dyn = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
-        double abs_resolved_shear_stress[nslip_dyn] = {};
-        double junk[SlipGeom::nslip] = {};
-        double kirchoff[ecmech::nsvec] = {};
+        R abs_resolved_shear_stress[nslip_dyn] = {};
+        R junk[SlipGeom::nslip] = {};
+        R kirchoff[ecmech::nsvec] = {};
         elasticity.elast_strain_to_kirchoff_stress(kirchoff, elast_strain);
         // resolve stress onto slip systems
         if constexpr (SlipGeom::dynamic) {
@@ -488,7 +489,7 @@ namespace evptn {
         slip_geom.evalRSS(abs_resolved_shear_stress, kirchoff, slip_geom.getP());
         slip_kinetics.evalGdots(gdot, junk, abs_resolved_shear_stress, kinetic_values);
 #if defined(ECMECH_USE_DPEFF)
-        double plastic_def_rate_d5[ntvec] = {};
+        R plastic_def_rate_d5[ntvec] = {};
         vecsVMa<ntvec, SlipGeom::nslip>(plastic_def_rate_d5, slip_geom.getP(), gdot);
         effective_shear_rate = vecd_Deff(plastic_def_rate_d5);
 #else
@@ -596,14 +597,15 @@ namespace evptn {
      * @see EvptnLatticeRotationProblem::get_omega_residual() for residual usage
      * @see EvptnLatticeStrainProblem::get_deriv_omega_wrt_elast_strain() for Jacobian usage
      */
+    template<class R, class T1, class T2, class T3>
     __ecmech_hdev__
     inline
-    void elasticity_higher_order_terms(double* const A_e_M35,
-                                        double* const ee_spin_vec,
-                                        double& ee_fac,
-                                        const double inv_a_vol,
-                                        const double* const elast_d5,
-                                        const double* const elast_dt_d5
+    void elasticity_higher_order_terms(R* const A_e_M35,
+                                        R* const ee_spin_vec,
+                                        R& ee_fac,
+                                        const T1 inv_a_vol,
+                                        const T2* const elast_d5,
+                                        const T3* const elast_dt_d5
                                     )
     {
         // from e edot product term in spin (formerly neglected)
@@ -784,23 +786,23 @@ namespace evptn {
      * @see qr6x6_pre_mul() for frame rotation operations
      * @see eval_d_dxi_impl_quat() for rotation derivative computations
      */
-    template<class ThermoElastN, size_t JAC_SIZE, size_t ind_sub_omega>
+    template<class ThermoElastN, size_t JAC_SIZE, size_t ind_sub_omega, class R, class T1, class T2, class T3, class T4, class T5, class T6, class T7, class T8, class T9, class T10, class T11, class T12, class T13>
     __ecmech_hdev__
     inline
-    void get_material_tangent_stiffness(double* const material_tangent,
-                                        const double* const jacobian,
-                                        const double* const dquat_domega_t,
-                                        const double* const rmat_5x5_sample2xtal,
-                                        const double* const quat,
-                                        const double* const rmat,
-                                        const double* const cauchy_stress,
-                                        const double* const dDp_hat_deps_sph,
-                                        const double* const dWp_hat_deps_sph,
-                                        const double* const elast_dev_press_vec,
-                                        const double* const elast_dt_d5,
-                                        const double dt,
-                                        const double inv_det_v_e,
-                                        const double inv_a_vol,
+    void get_material_tangent_stiffness(R* const material_tangent,
+                                        const T1* const jacobian,
+                                        const T2* const dquat_domega_t,
+                                        const T3* const rmat_5x5_sample2xtal,
+                                        const T4* const quat,
+                                        const T5* const rmat,
+                                        const T6* const cauchy_stress,
+                                        const T7* const dDp_hat_deps_sph,
+                                        const T8* const dWp_hat_deps_sph,
+                                        const T9* const elast_dev_press_vec,
+                                        const T10* const elast_dt_d5,
+                                        const T11 dt,
+                                        const T12 inv_det_v_e,
+                                        const T13 inv_a_vol,
                                         const ThermoElastN& thermo_elast_n
                                         )
     {
@@ -824,7 +826,7 @@ namespace evptn {
         //
         // dstrainomega_ddef_rate_t => [dlat_strain_ddef_rate_sample; domega_ddef_rate_sample];
         // Initially we set it to be our RHS
-        double dstrainomega_ddef_rate_t[ nRHS * JAC_SIZE ] = {}; // transpose for use in SNLS_LUP_SolveX !
+        R dstrainomega_ddef_rate_t[ nRHS * JAC_SIZE ] = {}; // transpose for use in SNLS_LUP_SolveX !
         {
         // RHS calculations
         //
@@ -862,7 +864,8 @@ namespace evptn {
             // set of terms as being = 0
         }
         // Now solve for our dstrain_ddefrate and domega_ddefrate terms
-        int err = SNLS_LUP_SolveX<JAC_SIZE>(const_cast<double*>(jacobian), dstrainomega_ddef_rate_t, nRHS);
+        const auto luOk = ::SNLS_LUP_SolveXV<JAC_SIZE>(const_cast<R*>(jacobian), dstrainomega_ddef_rate_t, nRHS);
+        const int err = all(luOk) ? 0 : -1;
         if (err != 0) {
             ECMECH_FAIL(__func__, "error from SNLS_LUP_SolveX");
         }
@@ -872,14 +875,14 @@ namespace evptn {
         // Gather the strain sensitivities into [ntvec x nsvec] layout,
         // dstrain_ddef_rate[i][j] = d(elast_d5)_i / d(def_rate_vecds)_j, leaving
         // the solution array untouched (its omega entries are read below).
-        double dstrain_ddef_rate[ ecmech::ntvec * ecmech::nsvec ];
+        R dstrain_ddef_rate[ ecmech::ntvec * ecmech::nsvec ];
         for (int iTvec = 0; iTvec<ecmech::ntvec; ++iTvec) {
             for (int jSvec = 0; jSvec<ecmech::nsvec; ++jSvec) {
                 dstrain_ddef_rate[ECMECH_NM_INDX(iTvec, jSvec, ecmech::ntvec, ecmech::nsvec)] =
                     dstrainomega_ddef_rate_t[ECMECH_NM_INDX(jSvec, iTvec, nRHS, JAC_SIZE)];
             }
         }
-        double temp_M6[ ecmech::nsvec2 ];
+        R temp_M6[ ecmech::nsvec2 ];
         thermo_elast_n.template multCauchyDif<ecmech::ntvec, ecmech::nsvec>(temp_M6, dstrain_ddef_rate, elast_dev_press_vec, dt, inv_det_v_e, inv_a_vol);
         // Apply final rotation; the crystal-frame direct coupling term placed by
         // multCauchyDif in the spherical column rotates with the other rows here
@@ -888,18 +891,18 @@ namespace evptn {
 
         // Calculate the d(QCauchy) / dDefRate_s term now and add that to
         {
-        double dcauchy_dquat[ ecmech::ntvec * ecmech::qdim ];
+        R dcauchy_dquat[ ecmech::ntvec * ecmech::qdim ];
         {
-            double drmat_dquat[ ecmech::ndim * ecmech::ndim * ecmech::qdim ];
+            R drmat_dquat[ ecmech::ndim * ecmech::ndim * ecmech::qdim ];
             d_quat_to_tensor(drmat_dquat, quat);
-            double dcauchy_drmat[ ecmech::ntvec * ecmech::ndim * ecmech::ndim ];
+            R dcauchy_drmat[ ecmech::ntvec * ecmech::ndim * ecmech::ndim ];
             d_rot_mat_vecd_smop(dcauchy_drmat, rmat, cauchy_stress);
             vecsMAB<ntvec, qdim, ndim*ndim>(dcauchy_dquat, dcauchy_drmat, drmat_dquat);
         }
 
         // We now need to be able to go from our domega_ddef_rate to dquat_ddef_rate
         // dquat_ddef_rate = dquat_domega_t * domega_ddef_rate_t
-        double dquat_ddef_rate[ ecmech::qdim * nRHS ];
+        R dquat_ddef_rate[ ecmech::qdim * nRHS ];
         for (int ii_I = 0; ii_I < nRHS; ++ii_I) {
             for (int ii_Q = 0; ii_Q < ecmech::qdim; ++ii_Q) {
                 int iiQI = ECMECH_NM_INDX(ii_Q, ii_I, ecmech::qdim, nRHS);
@@ -914,7 +917,7 @@ namespace evptn {
 
         // Now get the dcauchy_lattice_dI terms by doing ->
         // dcauchy_lattice_dI = d_cauchy_lattice_dquat * dRmat_quat_dI
-        double dqcauchy_ddefrate[ ecmech::ntvec * nRHS ];
+        R dqcauchy_ddefrate[ ecmech::ntvec * nRHS ];
         vecsMAB<ecmech::ntvec, nRHS, ecmech::qdim>(dqcauchy_ddefrate, dcauchy_dquat, dquat_ddef_rate);
         for (int ii_T = 0; ii_T < ecmech::ntvec; ++ii_T) {
             for (int ii_I = 0; ii_I < nRHS; ++ii_I) {

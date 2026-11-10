@@ -238,6 +238,15 @@ namespace ecmech {
              // resolve stress onto slip systems
              vecsVaTM<ecmech::ntvec, nslip>(taua, kirchoff, P_vec);
          }
+         /// evalRSS for a pack of points (value type R, see ECMech_value_type.h);
+         /// double calls take the virtual version above
+         template<class R, class T>
+         __ecmech_hdev__ inline void evalRSS(R* taua, 
+                                             const T* const kirchoff, 
+                                             const double* P_vec) const
+         {
+             vecsVaTM<ecmech::ntvec, nslip>(taua, kirchoff, P_vec);
+         }
        
       protected:
          /** @brief Slip plane normals for all systems, shape [nslip, ndim] */
