@@ -45,6 +45,8 @@
 #include "material_kernels.h"
 
 #include <math.h>
+#include <cstdio>
+#include <cmath>
 #include <fstream>
 #include <random>
 #include <sstream>
@@ -584,6 +586,17 @@ int main(int argc, char *argv[]){
    }
 
    run_time.stop();
+
+   // Full-precision checksums of the final state, so changes that should be
+   // bitwise neutral can be verified (the per-step stress print has 6 digits).
+   {
+      const double* sv_h = mm.getHost(state_vars, class_device);
+      const double* cs_h = mm.getHost(cauchy_stress_array, class_device);
+      long double s_sv = 0.0L, s_abs = 0.0L, s_cs = 0.0L;
+      for (int k = 0; k < nqpts * num_state_vars; ++k) { s_sv += sv_h[k]; s_abs += std::fabs(sv_h[k]); }
+      for (int k = 0; k < nqpts * ecmech::nsvec; ++k) { s_cs += cs_h[k]; }
+      std::printf("CHECKSUM state %.17Lg abs_state %.17Lg stress %.17Lg\n", s_sv, s_abs, s_cs);
+   }
 
    double time = run_time.elapsed();
 

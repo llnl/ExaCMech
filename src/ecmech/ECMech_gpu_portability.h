@@ -67,9 +67,11 @@
  * @def ECMECH_GPU_THREADS
  * @brief Default number of threads per block used when launching ExaCMech's GPU
  * kernels. Adjust here if a non-standard block size is needed for a given target
- * architecture.
+ * architecture, or override it at compile time (-DECMECH_GPU_THREADS=N).
  */
+#ifndef ECMECH_GPU_THREADS
 #define ECMECH_GPU_THREADS 256
+#endif
 
 /**
  * @def ECMECH_TEAM_PTS_PER_BLOCK

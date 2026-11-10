@@ -629,23 +629,6 @@ namespace ecmech {
                   ECMECH_FAIL(__func__, "not complete");
                }
 
-               // All of the stride lengths are constant within this function
-               const unsigned int def_rate_stride = m_strides[istride_def_rate];
-               const unsigned int spin_v_stride = m_strides[istride_spin_v];
-               const unsigned int vol_ratio_stride = m_strides[istride_vol_ratio];
-               const unsigned int int_eng_stride = m_strides[istride_int_eng];
-               const unsigned int stress_stride = m_strides[istride_stress];
-               const unsigned int history_stride = m_strides[istride_history];
-               const unsigned int tkelv_stride = m_strides[istride_tkelv];
-               const unsigned int sdd_stride = m_strides[istride_sdd];
-
-               const auto slipGeom = m_slipGeom;
-               const auto kinetics = m_kinetics;
-               const auto elastN = m_elastN;
-               const auto eosModel = m_eosModel;
-               const auto tolerance = m_tolerance;
-               const auto outputLevel = m_outputLevel;
-
 #if defined(ECMECH_SNLS_TEAM) && defined(__ecmech_gpu_active__)
                if (m_accel == ECM_EXEC_STRAT_GPU) {
                   bool ran = true;
@@ -665,44 +648,18 @@ namespace ecmech {
                   }
                }
 #endif
-               snls::forall<ECMECH_GPU_THREADS>(0, nPassed, [=]
-                  __ecmech_hdev__
-                  (int i)
-               {
-                  double *mtanSDThis = (mtanSDV ? &mtanSDV[ecmech::nsvec2 * i] : nullptr);
-                  auto get_response = [=] (const SlipGeom& slip_geom) -> bool {
-                     return getResponseSngl<SlipGeom, Kinetics, ThermoElastN, EosModel>
-                     (slip_geom, *kinetics, *elastN, *eosModel,
-                        dt,
-                        tolerance,
-                        &def_rate_d6vV[def_rate_stride * i],
-                        &spin_vecV[spin_v_stride * i],
-                        &rel_vol_ratiosV[vol_ratio_stride * i],
-                        &internal_energyV[int_eng_stride * i],
-                        &cauchy_stress_d6pV[stress_stride * i],
-                        &histV[history_stride * i],
-                        tkelvV[tkelv_stride * i],
-                        &sddV[sdd_stride * i],
-                        mtanSDThis,
-                        outputLevel);
-                  };
-                  bool status;
-                  // Thanks to NVCC being difficult we have to create an unnecessary temp variable just so we can use our
-                  // lambda expression in an if constexpr...
-                  auto slipGeom_tmp = slipGeom;
-                  // If we have dynamic slip systems then we need to create
-                  // a thread local slip geometery class or else we might run into
-                  // race condition issues...
-                  if constexpr (SlipGeom::dynamic) {
-                     SlipGeom slip_geom = *slipGeom_tmp;
-                     status = get_response(slip_geom);
-                  } else {
-                     status = get_response(*slipGeom_tmp);
-                  }
-                  if (!status) {
-                     histV[history_stride * i + iHistA_nFEval] *= -1;
-                  }
-               });
+#if defined(ECMECH_SNLS_TEAM)
+               // Experiment: GPU block size for the one-thread-per-point
+               // kernel, chosen at run time with ECMECH_GPU_BLOCK.
+               switch (m_accel == ECM_EXEC_STRAT_GPU ? gpuBlockSize() : ECMECH_GPU_THREADS) {
+                  case 64:  getResponseSolo<64>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                  case 128: getResponseSolo<128>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                  case 512: getResponseSolo<512>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                  default:  getResponseSolo<ECMECH_GPU_THREADS>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+               }
+#else
+               getResponseSolo<ECMECH_GPU_THREADS>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+#endif
 
                if (this->reduceStatus(histV, nPassed)) {
                   getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
@@ -798,6 +755,93 @@ namespace ecmech {
                      histV[history_stride * i + iHistA_nFEval] *= -1;
                   }
                });
+            }
+#endif
+
+            /// One thread per point: the original getResponse kernel, with the
+            /// GPU block size as a template parameter.
+            template<int BLOCK>
+            __ecmech_host__
+            void getResponseSolo(const double & dt,
+                                 const double * def_rate_d6vV,
+                                 const double * spin_vecV,
+                                 const double * rel_vol_ratiosV,
+                                 double * internal_energyV,
+                                 double * cauchy_stress_d6pV,
+                                 double * histV,
+                                 double * tkelvV,
+                                 double * sddV,
+                                 double * mtanSDV,
+                                 const int& nPassed) const
+            {
+               // All of the stride lengths are constant within this function
+               const unsigned int def_rate_stride = m_strides[istride_def_rate];
+               const unsigned int spin_v_stride = m_strides[istride_spin_v];
+               const unsigned int vol_ratio_stride = m_strides[istride_vol_ratio];
+               const unsigned int int_eng_stride = m_strides[istride_int_eng];
+               const unsigned int stress_stride = m_strides[istride_stress];
+               const unsigned int history_stride = m_strides[istride_history];
+               const unsigned int tkelv_stride = m_strides[istride_tkelv];
+               const unsigned int sdd_stride = m_strides[istride_sdd];
+
+               const auto slipGeom = m_slipGeom;
+               const auto kinetics = m_kinetics;
+               const auto elastN = m_elastN;
+               const auto eosModel = m_eosModel;
+               const auto tolerance = m_tolerance;
+               const auto outputLevel = m_outputLevel;
+
+               snls::forall<BLOCK>(0, nPassed, [=]
+                  __ecmech_hdev__
+                  (int i)
+               {
+                  double *mtanSDThis = (mtanSDV ? &mtanSDV[ecmech::nsvec2 * i] : nullptr);
+                  auto get_response = [=] (const SlipGeom& slip_geom) -> bool {
+                     return getResponseSngl<SlipGeom, Kinetics, ThermoElastN, EosModel>
+                     (slip_geom, *kinetics, *elastN, *eosModel,
+                        dt,
+                        tolerance,
+                        &def_rate_d6vV[def_rate_stride * i],
+                        &spin_vecV[spin_v_stride * i],
+                        &rel_vol_ratiosV[vol_ratio_stride * i],
+                        &internal_energyV[int_eng_stride * i],
+                        &cauchy_stress_d6pV[stress_stride * i],
+                        &histV[history_stride * i],
+                        tkelvV[tkelv_stride * i],
+                        &sddV[sdd_stride * i],
+                        mtanSDThis,
+                        outputLevel);
+                  };
+                  bool status;
+                  // Thanks to NVCC being difficult we have to create an unnecessary temp variable just so we can use our
+                  // lambda expression in an if constexpr...
+                  auto slipGeom_tmp = slipGeom;
+                  // If we have dynamic slip systems then we need to create
+                  // a thread local slip geometery class or else we might run into
+                  // race condition issues...
+                  if constexpr (SlipGeom::dynamic) {
+                     SlipGeom slip_geom = *slipGeom_tmp;
+                     status = get_response(slip_geom);
+                  } else {
+                     status = get_response(*slipGeom_tmp);
+                  }
+                  if (!status) {
+                     histV[history_stride * i + iHistA_nFEval] *= -1;
+                  }
+               });
+            }
+
+#if defined(ECMECH_SNLS_TEAM)
+            /// Experiment: block size for the one-thread-per-point GPU kernel,
+            /// read once from ECMECH_GPU_BLOCK (64, 128, 256 or 512).
+            __ecmech_host__
+            static int gpuBlockSize()
+            {
+               static const int nb = [] {
+                  const char* env = std::getenv("ECMECH_GPU_BLOCK");
+                  return env ? std::atoi(env) : ECMECH_GPU_THREADS;
+               }();
+               return nb;
             }
 #endif
 

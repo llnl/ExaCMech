@@ -73,6 +73,20 @@ public:
 #endif
     }
 
+    /// Host view of a sub-array that getNew returned for strategy strat
+    /// (moves the buffer to the host if needed). Only for end-of-run checks.
+    const T* getHost(const T* p, const ecmech::ExecutionStrategy strat) {
+#if defined(SNLS_RAJA_PORT_SUITE) && defined(__snls_gpu_active__)
+        if (strat == ecmech::ExecutionStrategy::GPU) {
+            const T* dev_base = buffer.data(chai::ExecutionSpace::GPU);
+            const std::ptrdiff_t off = p - dev_base;
+            return buffer.data(chai::ExecutionSpace::CPU) + off;
+        }
+#endif
+        (void) strat;
+        return p;
+    }
+
     /**
      * @brief Carve off the next `num_items`-sized slice of the backing array.
      *
