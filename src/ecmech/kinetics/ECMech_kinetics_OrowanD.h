@@ -227,6 +227,100 @@ namespace ecmech {
     *
     * @ingroup ECMech_kinetics
     */
+   /**
+    * SNLS problem for the reduced Orowan hardening update: unknowns are the
+    * (scaled increments of the) log total dislocation densities; the mobile
+    * densities are solved inside each evaluation by
+    * Kinetics::reducedHardening. Scaling follows Kinetics_HNProblem.
+    */
+   template<class Kinetics>
+   class OrowanReducedHProblem
+   {
+      public:
+         static constexpr int nDimSys = Kinetics::nH / 2;
+
+         __ecmech_hdev__
+         OrowanReducedHProblem(const Kinetics* const kinetics,
+                               const double* const y_m_o,
+                               const double* const y_t_o,
+                               const double* const nu,
+                               double dt) :
+            m_kinetics(kinetics), m_y_m_o(y_m_o), m_y_t_o(y_t_o), m_nu(nu), m_dt(dt)
+         {
+            for (int i = 0; i < nDimSys; i++) {
+               m_x_scale[i] = fmax(m_y_t_o[i], 1.0);
+               m_res_scale[i] = 1.0 / m_x_scale[i];
+            }
+         }
+
+         /// Log mobile and total densities (mobile first, as in the full problem)
+         __ecmech_hdev__
+         inline
+         void getHn(double* const h, const double* const x) const {
+            double y_t[nDimSys], S[nDimSys];
+            for (int i = 0; i < nDimSys; i++) { y_t[i] = m_y_t_o[i] + x[i] * m_x_scale[i]; }
+            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, &h[0], S, nullptr);
+            for (int i = 0; i < nDimSys; i++) { h[nDimSys + i] = y_t[i]; }
+         }
+
+         __ecmech_hdev__
+         inline
+         bool computeRJ(double* const resid,
+                        double* const Jacobian,
+                        const double* const x) {
+            double y_t[nDimSys], y_m[nDimSys], S[nDimSys];
+            for (int i = 0; i < nDimSys; i++) { y_t[i] = m_y_t_o[i] + x[i] * m_x_scale[i]; }
+            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, y_m, S, Jacobian);
+            for (int i = 0; i < nDimSys; i++) {
+               resid[i] = (x[i] * m_x_scale[i] - S[i]) * m_res_scale[i];
+            }
+            if (Jacobian) {
+               for (int i = 0; i < nDimSys; i++) {
+                  for (int j = 0; j < nDimSys; j++) {
+                     Jacobian[i * nDimSys + j] *= -m_res_scale[i] * m_x_scale[j];
+                  }
+                  Jacobian[i * nDimSys + i] += 1.0;
+               }
+            }
+            return true;
+         }
+
+      private:
+         const Kinetics* m_kinetics;
+         const double* const m_y_m_o;
+         const double* const m_y_t_o;
+         const double* const m_nu;
+         const double m_dt;
+         double m_x_scale[nDimSys], m_res_scale[nDimSys];
+   };
+
+   /// Reduced-form counterpart of updateHN for KineticsOrowanD (log form).
+   /// hs_n and hs_o hold log densities, mobile first. Same solver settings
+   /// as updateHN; returns the number of function evaluations or -1.
+   template<class Kinetics>
+   __ecmech_hdev__
+   inline
+   int updateHOrowanReduced(const Kinetics* const kinetics,
+                            double* const hs_n,
+                            const double* const hs_o,
+                            double dt,
+                            const double* const nu,
+                            int outputLevel = 0)
+   {
+      constexpr int n = Kinetics::nH / 2;
+      OrowanReducedHProblem<Kinetics> prob(kinetics, &hs_o[0], &hs_o[n], nu, dt);
+      snls::SNLSTrDlDenseG<OrowanReducedHProblem<Kinetics> > solver(prob);
+      snls::TrDeltaControl deltaControl;
+      deltaControl._deltaInit = 1e0;
+      solver.setupSolver(100, 1e-10, &deltaControl, outputLevel);
+      for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
+      const snls::SNLSStatus_t status = solver.solve();
+      int nFevals = solver.getNFEvals();
+      if (status != snls::converged) { nFevals = -1; }
+      prob.getHn(hs_n, solver._x);
+      return nFevals;
+   }
+
    template<bool withGAthermal,
             bool pOne, // l_p_1
             bool qOne, // l_q_1
@@ -1052,9 +1146,22 @@ namespace ecmech {
                }
             }
 
+#if !defined(ECMECH_OROWAN_FULL_HSOLVE)
+            int nFEvals;
+            if constexpr (LOGFORM) {
+               // nslip x nslip solve in the total densities (see reducedHardening)
+               nFEvals = updateHOrowanReduced(this, &hs_u[0], &ihs_o[0], dt, nu, outputLevel);
+            }
+            else {
+               nFEvals = updateHN<KineticsOrowanD>(this,
+                                                   &hs_u[0], &ihs_o[0], dt, nu, hvals, tkelv,
+                                                   outputLevel);
+            }
+#else
             int nFEvals = updateHN<KineticsOrowanD>(this,
                                                    &hs_u[0], &ihs_o[0], dt, nu, hvals, tkelv,
                                                    outputLevel);
+#endif
             if (LOGFORM) {
                for (int i = 0; i < nslip * 2; i++) {
                   hs_u[i] = exp(hs_u[i]);
@@ -1124,6 +1231,79 @@ namespace ecmech {
             }
 
             return nFEvals;
+         }
+
+         /**
+          * Reduced form of the log-form dislocation density update, in the
+          * total densities only.
+          *
+          * The update solves, per slip system i (y = log density, H = e^y,
+          * f_i = sum_j a_ij H_t,j the forest density, alpha = c_mult - c_trap,
+          * beta = c_ann * d_ann, nu_i fixed from the beginning of the step):
+          *   mobile: y_m,i - y_m,i^o = dt nu_i (alpha sqrt(f_i) - beta H_m,i)
+          *   total : y_t,i - y_t,i^o = dt nu_i H_m,i (c_mult sqrt(f_i) - beta H_m,i) / H_t,i
+          * Each mobile equation involves only its own mobile density and the
+          * totals (through f), and g(y) = y - y^o - dt nu (alpha sqrt(f) - beta e^y)
+          * has g' = 1 + dt nu beta e^y > 0 and g'' > 0, so for given totals it
+          * has exactly one root, found here by scalar Newton from y^o. That
+          * leaves an nslip x nslip system in the totals instead of the
+          * 2 nslip x 2 nslip coupled one (whose mobile-wrt-mobile and
+          * total-wrt-mobile blocks are diagonal); its Jacobian is the Schur
+          * complement of the coupled one, obtained here by implicit
+          * differentiation of the mobile equations.
+          *
+          * @param[in]  y_t   log total densities (nslip)
+          * @param[in]  y_m_o log mobile densities at the beginning of the step
+          * @param[in]  nu    evolution rates, as from getEvolVals (nslip)
+          * @param[in]  dt    time step
+          * @param[out] y_m   log mobile densities solving the mobile equations
+          * @param[out] S     right-hand side of the total equations, i.e. the
+          *                   predicted increment of y_t (nslip)
+          * @param[out] dS    dS_i/dy_t,j, row-major nslip x nslip, or nullptr
+          */
+         __ecmech_hdev__
+         inline
+         void
+         reducedHardening(const double* const y_t,
+                          const double* const y_m_o,
+                          const double* const nu,
+                          const double dt,
+                          double* const y_m,
+                          double* const S,
+                          double* const dS) const
+         {
+            constexpr int n = SlipGeom::nslip;
+            double Ht[n];
+            for (int i = 0; i < n; i++) { Ht[i] = exp(y_t[i]); }
+            double forest[n];
+            vecsVMa<n>(&forest[0], &m_a_mat[0], &Ht[0]);
+            const double alpha = m_c_mult - m_c_trap;
+            const double beta = m_c_ann * m_d_ann;
+            for (int i = 0; i < n; i++) {
+               const double sf = sqrt(forest[i]);
+               const double a_i = dt * nu[i];
+               // scalar Newton on the mobile equation (monotone and convex)
+               double y = y_m_o[i];
+               for (int k = 0; k < 50; k++) {
+                  const double e = exp(y);
+                  const double g = y - y_m_o[i] - a_i * (alpha * sf - beta * e);
+                  const double dy = g / (one + a_i * beta * e);
+                  y -= dy;
+                  if (fabs(dy) <= 1e-15 * (one + fabs(y))) { break; }
+               }
+               y_m[i] = y;
+               const double Hm = exp(y);
+               S[i] = a_i * Hm * (m_c_mult * sf - beta * Hm) / Ht[i];
+               if (dS) {
+                  const double gp = one + a_i * beta * Hm;
+                  for (int j = 0; j < n; j++) {
+                     const double dsf = m_a_mat[i * n + j] * Ht[j] / (2.0 * sf); // d sqrt(f_i) / d y_t,j
+                     const double dym = a_i * alpha * dsf / gp;                   // d y_m,i / d y_t,j
+                     dS[i * n + j] = a_i / Ht[i] * ((m_c_mult * sf - 2.0 * beta * Hm) * Hm * dym + m_c_mult * Hm * dsf)
+                                     - ((i == j) ? S[i] : 0.0);
+                  }
+               }
+            }
          }
 
          /**
