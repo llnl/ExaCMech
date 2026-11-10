@@ -85,7 +85,7 @@
 
 #include "SNLS_TrDLDenseG.h"
 #include "SNLS_HybrdTrDLDenseG.h"
-#if defined(ECMECH_SNLS_TEAM)
+#if defined(ECMECH_SNLS_TEAM) || defined(ECMECH_PERSISTENT_EXPT)
 #include "SNLS_device_forall.h"
 #include <new>
 #endif
@@ -776,6 +776,117 @@ bool getResponseSngl(const SlipGeom& slipGeom,
     postprocess(prob_state, elastN, def_rate_d6v_sample, sdd, internal_energy, cauchy_stress_d5p_xtal, dev_strain_energy_total, halfVMidDt);
     return true;
 } // getResponseSngl
+
+#if defined(ECMECH_SNLS_TEAM) || defined(ECMECH_PERSISTENT_EXPT)
+/**
+ * Experiment: one point's getResponseSngl split into start / step / finish,
+ * so a persistent GPU kernel can advance every lane's point by one Newton
+ * iteration per round (keeping all lanes on the same code path) and give a
+ * lane a new point as soon as its current one is done. The operations per
+ * point are those of getResponseSngl (and main_problem), in the same order.
+ *
+ * The per-point objects hold references to each other (and ProblemState to
+ * the point's arrays), so they are rebuilt in place with placement new for
+ * every point and destroyed in finish().
+ */
+template<class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
+struct PersistentPoint {
+    using PS = ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>;
+    using Prob = EvptnUpdstProblem<SlipGeom, Kinetics, ThermoElastN, PS>;
+    using Solver = snls::SNLSTrDlDenseG<Prob>;
+    static constexpr int nDim = Prob::nDimSys;
+
+    alignas(PS) unsigned char m_ps[sizeof(PS)];
+    alignas(Prob) unsigned char m_prob[sizeof(Prob)];
+    alignas(Solver) unsigned char m_solver[sizeof(Solver)];
+    snls::TrDeltaControl m_dc;
+    double m_residual[nDim];
+    double m_jacobian[nDim * nDim];
+    double m_halfVMidDt, m_dev_strain_energy_total;
+    // the current point's data
+    const double* m_def_rate_d6v_sample;
+    double* m_internal_energy;
+    double* m_hist;
+    double* m_sdd;
+    double* m_mtanSD;
+
+    __ecmech_hdev__ PS& ps() { return *reinterpret_cast<PS*>(m_ps); }
+    __ecmech_hdev__ Prob& prob() { return *reinterpret_cast<Prob*>(m_prob); }
+    __ecmech_hdev__ Solver& solver() { return *reinterpret_cast<Solver*>(m_solver); }
+
+    /// Set up the point (preprocess, problem, solver, initial evaluation).
+    /// Returns false if preprocess failed (nothing else to do for it).
+    /// Not inlined, to keep the persistent kernel's per-round loop small.
+    __ecmech_hdev__ __attribute__((noinline))
+    bool start(const SlipGeom& slipGeom, const Kinetics& kinetics, const ThermoElastN& elastN, const EosModel& eos,
+               const double dt, const double tolerance,
+               const double* const def_rate_d6v_sample, const double* const spin_vec_sample,
+               const double* const rel_vol_ratios, double* const internal_energy,
+               double* const cauchy_stress_d6p, double* const hist, double& tkelv,
+               double* const sdd, double* const mtanSD, int outputLevel)
+    {
+        m_def_rate_d6v_sample = def_rate_d6v_sample;
+        m_internal_energy = internal_energy;
+        m_hist = hist;
+        m_sdd = sdd;
+        m_mtanSD = mtanSD;
+        new (m_ps) PS(hist, cauchy_stress_d6p, tkelv, def_rate_d6v_sample, spin_vec_sample, rel_vol_ratios, dt);
+        const bool pre_status = preprocess(slipGeom, kinetics, eos, elastN, rel_vol_ratios, internal_energy,
+                                           def_rate_d6v_sample, ps(), m_halfVMidDt, m_dev_strain_energy_total);
+        if (!pre_status) {
+            ps().~PS();
+            return false;
+        }
+        new (m_prob) Prob(slipGeom, kinetics, elastN, ps());
+        new (m_solver) Solver(prob());
+        m_dc = snls::TrDeltaControl();
+        m_dc._deltaInit = 1e0;
+        {
+            static constexpr int maxIter = 200;
+            solver().setupSolver(maxIter, tolerance, &m_dc, outputLevel);
+        }
+        for (int iX = 0; iX < solver().getNDim(); ++iX) {
+            solver()._x[iX] = 0e0;
+        }
+        solver().solveInit(m_residual, m_jacobian);
+        return true;
+    }
+
+    /// One Newton iteration; true while the point still needs more.
+    __ecmech_hdev__
+    bool step() { return solver().solveStep(m_residual, m_jacobian); }
+
+    /// Finish the point after its solve stopped; returns its success flag
+    /// (false: the solve failed, as when getResponseSngl returns false).
+    __ecmech_hdev__ __attribute__((noinline))
+    bool finish(const ThermoElastN& elastN)
+    {
+        bool ok = true;
+        if (solver().getStatus() < snls::converged) {
+#if defined(__ecmech_host_only__)
+            std::cout << "trust region solver residual " << solver().getRes() << " exit status " << solver().getStatus() << std::endl;
+            ECMECH_WARN(__func__, "Solver(s) failed to converge -- will try again with implicit elastic strain solve only");
+#endif
+            ok = false;
+        }
+        else {
+            double cauchy_stress_d5p_xtal[ecmech::nsvec];
+            if (m_mtanSD != nullptr) {
+                computeTangentStiffness(prob(), solver(), ps(), m_mtanSD);
+            }
+            prob().stateFromX(ps().elast_d5_u, ps().quat_u, solver()._x);
+            m_hist[iHistA_nFEval] = solver().getNFEvals(); // does _not_ include updateH iterations
+            postprocess_prob<Kinetics::nH>(prob(), ps(), cauchy_stress_d5p_xtal);
+            postprocess(ps(), elastN, m_def_rate_d6v_sample, m_sdd, m_internal_energy, cauchy_stress_d5p_xtal,
+                        m_dev_strain_energy_total, m_halfVMidDt);
+        }
+        solver().~Solver();
+        prob().~Prob();
+        ps().~PS();
+        return ok;
+    }
+};
+#endif // ECMECH_SNLS_TEAM
 
 #if defined(ECMECH_SNLS_TEAM)
 /**

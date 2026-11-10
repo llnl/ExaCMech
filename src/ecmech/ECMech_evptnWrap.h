@@ -271,6 +271,9 @@ namespace ecmech {
             __ecmech_host__
             ~matModel()
             {
+#if (defined(ECMECH_SNLS_TEAM) || defined(ECMECH_PERSISTENT_EXPT)) && defined(__ecmech_gpu_active__)
+               if (m_persistCounterAlloc) { m_persistCounter.free(); }
+#endif
                m_slipGeom.free();
                m_kinetics.free();
                m_eosModel.free();
@@ -648,6 +651,17 @@ namespace ecmech {
                   }
                }
 #endif
+#if (defined(ECMECH_SNLS_TEAM) || defined(ECMECH_PERSISTENT_EXPT)) && defined(__ecmech_gpu_active__)
+               // Experiment: persistent, iteration-uniform kernel (ECMECH_PERSISTENT=1)
+               if (m_accel == ECM_EXEC_STRAT_GPU && persistentEnabled()) {
+                  getResponsePersistent(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+                  if (this->reduceStatus(histV, nPassed)) {
+                     getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
+                                      cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+                  }
+                  return;
+               }
+#endif
 #if defined(ECMECH_SNLS_TEAM)
                // Experiment: GPU block size for the one-thread-per-point
                // kernel, chosen at run time with ECMECH_GPU_BLOCK.
@@ -756,6 +770,114 @@ namespace ecmech {
                   }
                });
             }
+#endif
+
+#if (defined(ECMECH_SNLS_TEAM) || defined(ECMECH_PERSISTENT_EXPT)) && defined(__ecmech_gpu_active__)
+            __ecmech_host__
+            static bool persistentEnabled()
+            {
+               static const bool on = std::getenv("ECMECH_PERSISTENT") != nullptr;
+               return on;
+            }
+
+            /// Experiment: a fixed number of worker threads (ECMECH_PERSIST_WORKERS,
+            /// default 4096) each take points from an atomic counter. Every round,
+            /// each worker advances its current point by one Newton iteration
+            /// (the same code for all lanes); a worker whose point has finished
+            /// completes it and takes the next one. Each point's computation is
+            /// that of getResponseSngl; only the lane computing it changes.
+            __ecmech_host__
+            void getResponsePersistent(const double & dt,
+                                       const double * def_rate_d6vV,
+                                       const double * spin_vecV,
+                                       const double * rel_vol_ratiosV,
+                                       double * internal_energyV,
+                                       double * cauchy_stress_d6pV,
+                                       double * histV,
+                                       double * tkelvV,
+                                       double * sddV,
+                                       double * mtanSDV,
+                                       const int& nPassed) const
+            {
+               const unsigned int def_rate_stride = m_strides[istride_def_rate];
+               const unsigned int spin_v_stride = m_strides[istride_spin_v];
+               const unsigned int vol_ratio_stride = m_strides[istride_vol_ratio];
+               const unsigned int int_eng_stride = m_strides[istride_int_eng];
+               const unsigned int stress_stride = m_strides[istride_stress];
+               const unsigned int history_stride = m_strides[istride_history];
+               const unsigned int tkelv_stride = m_strides[istride_tkelv];
+               const unsigned int sdd_stride = m_strides[istride_sdd];
+
+               const auto slipGeom = m_slipGeom;
+               const auto kinetics = m_kinetics;
+               const auto elastN = m_elastN;
+               const auto eosModel = m_eosModel;
+               const auto tolerance = m_tolerance;
+               const auto outputLevel = m_outputLevel;
+
+               static const int workers_env = [] {
+                  const char* env = std::getenv("ECMECH_PERSIST_WORKERS");
+                  return env ? std::atoi(env) : 4096;
+               }();
+               const int nWorkers = (workers_env < nPassed) ? workers_env : nPassed;
+
+               if (!m_persistCounterAlloc) {
+                  auto mm = snls::memoryManager::getInstance();
+                  m_persistCounter = mm.allocManagedArray<int>(1);
+                  m_persistCounterAlloc = true;
+               }
+               int* counter = m_persistCounter.data(chai::ExecutionSpace::GPU);
+               snls::forall<1>(0, 1, [=] __ecmech_hdev__ (int) { counter[0] = 0; });
+
+               using PP = evptn::PersistentPoint<SlipGeom, Kinetics, ThermoElastN, EosModel>;
+               snls::forall<ECMECH_GPU_THREADS>(0, nWorkers, [=] __ecmech_hdev__ (int)
+               {
+                  PP pp;
+                  auto slipGeom_tmp = slipGeom;
+                  // local: lane-local copy of a dynamic slip geometry, rebuilt
+                  // for every point (as getResponseSolo copies it per point);
+                  // nullptr for static geometries, which are shared.
+                  auto run = [&] (const SlipGeom& sg, SlipGeom* local) {
+                     int i = 0;
+                     bool active = false;
+                     while (true) {
+                        if (active) {
+                           if (!pp.step()) {
+                              const bool ok = pp.finish(*elastN);
+                              if (!ok) { histV[history_stride * i + iHistA_nFEval] *= -1; }
+                              active = false;
+                           }
+                        }
+                        if (!active) {
+                           i = RAJA::atomicAdd<RAJA::auto_atomic>(counter, 1);
+                           if (i >= nPassed) { break; }
+                           if (local) { local->~SlipGeom(); new (local) SlipGeom(*slipGeom_tmp); }
+                           double *mtanSDThis = (mtanSDV ? &mtanSDV[ecmech::nsvec2 * i] : nullptr);
+                           active = pp.start(sg, *kinetics, *elastN, *eosModel, dt, tolerance,
+                                             &def_rate_d6vV[def_rate_stride * i],
+                                             &spin_vecV[spin_v_stride * i],
+                                             &rel_vol_ratiosV[vol_ratio_stride * i],
+                                             &internal_energyV[int_eng_stride * i],
+                                             &cauchy_stress_d6pV[stress_stride * i],
+                                             &histV[history_stride * i],
+                                             tkelvV[tkelv_stride * i],
+                                             &sddV[sdd_stride * i],
+                                             mtanSDThis, outputLevel);
+                           if (!active) { histV[history_stride * i + iHistA_nFEval] *= -1; }
+                        }
+                     }
+                  };
+                  if constexpr (SlipGeom::dynamic) {
+                     SlipGeom slip_geom_local = *slipGeom_tmp;
+                     run(slip_geom_local, &slip_geom_local);
+                  } else {
+                     run(*slipGeom_tmp, nullptr);
+                  }
+               });
+            }
+
+            mutable chai::ManagedArray<int> m_persistCounter;
+            mutable bool m_persistCounterAlloc = false;
 #endif
 
             /// One thread per point: the original getResponse kernel, with the
