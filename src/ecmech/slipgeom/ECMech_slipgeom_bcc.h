@@ -868,10 +868,11 @@ namespace ecmech {
           * @param[in] kirchoff Kirchhoff stress (deviatoric 5-vector)
           * @param[in] fill_PQ Whether to fill P_vec and Q_vec arrays
           */
-         __ecmech_hdev__ inline void NSprojection(double* taua,
+         template<class R>
+         __ecmech_hdev__ inline void NSprojection(R* taua,
                                                   double* P_vec, 
                                                   double* Q_vec, 
-                                                  const double* const kirchoff,
+                                                  const R* const kirchoff,
                                                   bool fill_PQ) const
          {
              // Resolve stress onto slip systems
@@ -880,7 +881,7 @@ namespace ecmech {
              for (int iSlip = 0; iSlip < nslip; ++iSlip) {
                  double P_s[2 * ecmech::ntvec];
                  double Q_s[2 * ecmech::nwvec];
-                 double tau_s[2] = { 0.0 };
+                 R tau_s[2] = { 0.0, 0.0 };
                  
                  for (int iS = 0; iS < 2; ++iS) {
                      
@@ -931,11 +932,14 @@ namespace ecmech {
                  }
                  
                  // Keep highest value
-                 int iS = (int)(tau_s[1] > tau_s[0]);
+                 // the sense with the larger projection (per point)
+                 const auto second = (tau_s[1] > tau_s[0]);
                  
-                 taua[iSlip] = tau_s[iS];
-                 if (taua[iSlip] < 0.0) taua[iSlip] = 0.0;
+                 taua[iSlip] = select(second, tau_s[1], tau_s[0]);
+                 taua[iSlip] = select(taua[iSlip] < 0.0, R(0.0), taua[iSlip]);
                  
+                 if constexpr (lanes_of<R>() == 1) { // P and Q are filled per point (getPQ)
+                 const int iS = second ? 1 : 0;
                  if (fill_PQ) {
                      for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
                          P_vec[ECMECH_NM_INDX(iTvec, iSlip, ecmech::ntvec, nslip)] = P_s[iS * ecmech::ntvec + iTvec];
@@ -945,6 +949,7 @@ namespace ecmech {
                          Q_vec[ECMECH_NM_INDX(iWvec, iSlip, ecmech::nwvec, nslip)] = Q_s[iS * ecmech::nwvec + iWvec];
                          m_Q_vec[ECMECH_NM_INDX(iWvec, iSlip, ecmech::nwvec, nslip)] = Q_s[iS * ecmech::nwvec + iWvec];
                      }
+                 }
                  }
              }
          }
@@ -1007,6 +1012,22 @@ namespace ecmech {
                SlipGeom::evalRSS(taua, kirchoff, m_P_ref_vec);
             } else {
                NSprojection(taua, NULL, NULL, kirchoff, false);
+            }
+         }
+
+         /// The resolved shear stress depends on the stress only (not on the
+         /// per-point P), so a pack of points can use the projection directly.
+         static constexpr bool rssFromStress = true;
+         /// evalRSS for a pack of points (value type R, see ECMech_value_type.h)
+         template<class R, class T>
+         __ecmech_hdev__ inline void evalRSS(R* taua, 
+                                             const T* const kirchoff, 
+                                             const double* /*P_vec*/) const
+         {
+            if (m_isotropic) {
+               SlipGeom::evalRSS(taua, kirchoff, m_P_ref_vec);
+            } else {
+               NSprojection(taua, (double*)nullptr, (double*)nullptr, kirchoff, false);
             }
          }
 

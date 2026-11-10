@@ -42,6 +42,53 @@ struct ProblemStatePack {
    vdouble h_state_u[(Kinetics::nH > 0) ? Kinetics::nH : 1];
 };
 
+template<class SG, class = void> struct has_rss_from_stress : std::false_type {};
+template<class SG> struct has_rss_from_stress<SG, std::void_t<decltype(SG::rssFromStress)>> : std::true_type {};
+
+/// A dynamic (stress-dependent) slip geometry for a pack of points: each
+/// point's P, Q and extra values (as its own geometry computed them in
+/// preprocess) gathered into packs, behind the interface the templated
+/// problem uses (nslip, nSlipExtra, dynamic, getP, getQ, evalRSS,
+/// getExtras).
+template<class SG>
+struct SlipGeomPack {
+   static constexpr int nslip = SG::nslip;
+   static constexpr int nSlipExtra = SG::nSlipExtra;
+   static constexpr bool dynamic = SG::dynamic;
+   const SG* m_g0 = nullptr; ///< one point's geometry (for projections that depend on the stress only)
+   vdouble m_P[ecmech::ntvec * nslip];
+   vdouble m_Q[ecmech::nwvec * nslip];
+   vdouble m_extras[(nSlipExtra > 0) ? nSlipExtra : 1];
+
+   /// gather point l's geometry
+   void setLane(int l, const SG& g) {
+      if (!m_g0) { m_g0 = &g; }
+      const double* const P = g.getP();
+      const double* const Q = g.getQ();
+      for (int k = 0; k < ecmech::ntvec * nslip; ++k) { m_P[k][l] = P[k]; }
+      for (int k = 0; k < ecmech::nwvec * nslip; ++k) { m_Q[k][l] = Q[k]; }
+      if constexpr (nSlipExtra > 0) {
+         double e[nSlipExtra];
+         g.getExtras(e);
+         for (int k = 0; k < nSlipExtra; ++k) { m_extras[k][l] = e[k]; }
+      }
+   }
+   const vdouble* getP() const { return m_P; }
+   const vdouble* getQ() const { return m_Q; }
+   template<class T>
+   void evalRSS(vdouble* taua, const T* const kirchoff, const vdouble* P_vec) const {
+      if constexpr (has_rss_from_stress<SG>::value) {
+         m_g0->evalRSS(taua, kirchoff, (const double*)nullptr);
+      }
+      else {
+         vecsVaTM<ecmech::ntvec, nslip>(taua, kirchoff, P_vec);
+      }
+   }
+   void getExtras(vdouble* const e) const {
+      for (int k = 0; k < nSlipExtra; ++k) { e[k] = m_extras[k]; }
+   }
+};
+
 /// kinetics whose slip rates are templated on the value type
 template<class K, class = void> struct has_pack_slip_rates : std::false_type {};
 template<class K>
@@ -56,7 +103,7 @@ struct has_pack_hardening<K, std::void_t<decltype(std::declval<const K&>().updat
 /// Models the pack path supports (others use the scalar path)
 template<class SlipGeom, class Kinetics, class ThermoElastN>
 struct simd_supported {
-   static constexpr bool value = !SlipGeom::dynamic && has_pack_slip_rates<Kinetics>::value;
+   static constexpr bool value = has_pack_slip_rates<Kinetics>::value;
 };
 
 /// Run-time switch ECMECH_SIMD=1
@@ -83,7 +130,9 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
 {
    using PS = evptn::ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>;
    using PSV = ProblemStatePack<Kinetics>;
-   using Prob = evptn::EvptnUpdstProblem<SlipGeom, Kinetics, ThermoElastN, PSV>;
+   constexpr bool dynamicGeom = SlipGeom::dynamic;
+   using GeomV = std::conditional_t<dynamicGeom, SlipGeomPack<SlipGeom>, SlipGeom>;
+   using Prob = evptn::EvptnUpdstProblem<GeomV, Kinetics, ThermoElastN, PSV>;
    using Solver = snls::SNLSTrDlDenseG_Lanes<Prob, vdouble>;
    static_assert(simd_supported<SlipGeom, Kinetics, ThermoElastN>::value, "unsupported model for the SIMD path");
    constexpr bool hardeningOnPacks = has_pack_hardening<Kinetics>::value;
@@ -112,6 +161,9 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
       }
       double padHist[W][128], padStress[W][8], padEnergy[W][8], padSdd[W][8], padT[W];
       alignas(PS) unsigned char psMem[W][sizeof(PS)];
+      // dynamic slip geometries: one copy per point (as getResponseSolo makes per thread)
+      alignas(SlipGeom) unsigned char geomMem[dynamicGeom ? W : 1][sizeof(SlipGeom)];
+      const SlipGeom* geom[W];
       PS* ps[W];
       bool ok[W];
       double halfVMidDt[W], devE[W];
@@ -135,8 +187,10 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
          }
          ps[l] = new (psMem[l]) PS(histL[l], stressL[l], *tL[l], &def_rate_d6vV[def_rate_stride * i],
                                    &spin_vecV[spin_v_stride * i], &rel_vol_ratiosV[vol_ratio_stride * i], dt);
+         if constexpr (dynamicGeom) { geom[l] = new (geomMem[l]) SlipGeom(slipGeom); }
+         else { geom[l] = &slipGeom; }
          ok[l] = evptn::preprocess<SlipGeom, Kinetics, EosModel, ThermoElastN, PS, false, hardeningOnPacks>
-                    (slipGeom, kinetics, eos, elastN, &rel_vol_ratiosV[vol_ratio_stride * i],
+                    (*geom[l], kinetics, eos, elastN, &rel_vol_ratiosV[vol_ratio_stride * i],
                      energyL[l], &def_rate_d6vV[def_rate_stride * i], *ps[l], halfVMidDt[l], devE[l]);
       }
       int lref = 0;
@@ -175,8 +229,17 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
          for (int k = 0; k < nH; ++k) { pv.h_state_u[k][l] = p.h_state_u[k]; }
       }
 
+      // the slip geometry of the pack
+      const GeomV* geomV = nullptr;
+      SlipGeomPack<SlipGeom> geomPack;
+      if constexpr (dynamicGeom) {
+         for (int l = 0; l < W; ++l) { geomPack.setLane(l, *geom[ok[l] ? l : lref]); }
+         geomV = &geomPack;
+      }
+      else { geomV = &slipGeom; }
+
       // the Newton solve on the pack (main_problem's settings)
-      Prob prob(slipGeom, kinetics, elastN, pv);
+      Prob prob(*geomV, kinetics, elastN, pv);
       Solver solver(prob);
       solver.setupSolver(200, tolerance, &deltaControl);
       for (int k = 0; k < n; ++k) { solver._x[k] = 0.0; }
@@ -244,6 +307,7 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
                             cauchy_stress_d5p_xtal, devE[l], halfVMidDt[l]);
          p.~PS();
       }
+      if constexpr (dynamicGeom) { for (int l = 0; l < W; ++l) { geom[l]->~SlipGeom(); } }
    }
    if (statsOn && (++statCalls % 60 == 0)) {
       std::printf("SIMDSTATS lanes %d main-solve lane utilization %.3f (useful %ld / issued %ld)\n",
