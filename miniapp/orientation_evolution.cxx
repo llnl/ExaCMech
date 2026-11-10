@@ -596,6 +596,11 @@ int main(int argc, char *argv[]){
       for (int k = 0; k < nqpts * num_state_vars; ++k) { s_sv += sv_h[k]; s_abs += std::fabs(sv_h[k]); }
       for (int k = 0; k < nqpts * ecmech::nsvec; ++k) { s_cs += cs_h[k]; }
       std::printf("CHECKSUM state %.17Lg abs_state %.17Lg stress %.17Lg\n", s_sv, s_abs, s_cs);
+      // the material tangent of the last step (ecmech::nsvec2 entries per point)
+      const double* mt_h = mm.getHost(ddsdde_array, class_device);
+      long double s_mt = 0.0L, s_mtabs = 0.0L;
+      for (int k = 0; k < nqpts * ecmech::nsvec2; ++k) { s_mt += mt_h[k]; s_mtabs += std::fabs(mt_h[k]); }
+      std::printf("CHECKSUM tangent %.17Lg abs_tangent %.17Lg\n", s_mt, s_mtabs);
    }
 
    double time = run_time.elapsed();
