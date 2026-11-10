@@ -388,6 +388,17 @@ namespace evptn {
             }
         }
 
+        /// Diagonal of dT/d(elastic strain) (what multDTDepsT applies row by
+        /// row): d[i] = K_ii * inv_a_vol. Lets callers skip forming
+        /// multDTDepsT's ntvec x p product (see get_slip_rate_deriv_terms).
+        __ecmech_hdev__
+        inline
+        void dTdepsDiag(double* const d, double inv_a_vol) const {
+            for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
+                d[iTvec] = m_K_diag[iTvec] * inv_a_vol;
+            }
+        }
+
          /**
           * @brief Convert Kirchhoff stress to Cauchy stress with volume scaling.
           * 
@@ -860,6 +871,17 @@ namespace evptn {
                     int ii = ECMECH_NM_INDX(iTvec, iP, ecmech::ntvec, p);
                     P[ii] = dTdepsThis * A[ii];
                 }
+            }
+        }
+
+        /// Diagonal of dT/d(elastic strain) (what multDTDepsT applies row by
+        /// row): d[i] = K_ii * inv_a_vol. Lets callers skip forming
+        /// multDTDepsT's ntvec x p product (see get_slip_rate_deriv_terms).
+        __ecmech_hdev__
+        inline
+        void dTdepsDiag(double* const d, double inv_a_vol) const {
+            for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
+                d[iTvec] = m_K_diag[iTvec] * inv_a_vol;
             }
         }
 

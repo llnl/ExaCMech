@@ -47,6 +47,8 @@
  */
 
 #pragma once
+#include <type_traits>
+#include <utility>
 
 #include "ECMech_core.h"
 #include "ECMech_util.h"
@@ -258,6 +260,13 @@ namespace evptn {
      * @see ThermoElastN::multDTDepsT() for elastic stiffness multiplication
      * @see vecsMABT() for matrix-matrix transpose products
      */
+    /// True if the elasticity class provides a diagonal dT/deps (dTdepsDiag)
+    template<class T, class = void>
+    struct has_dTdepsDiag : std::false_type {};
+    template<class T>
+    struct has_dTdepsDiag<T, std::void_t<decltype(std::declval<const T&>().dTdepsDiag(std::declval<double*>(), 0.0))>>
+        : std::true_type {};
+
     template<class SlipGeom, class ThermoElastN>
     __ecmech_hdev__
     inline
@@ -270,6 +279,40 @@ namespace evptn {
                                 )
     {
         if constexpr (SlipGeom::nslip > 0) {
+        if constexpr (has_dTdepsDiag<ThermoElastN>::value) {
+            // Diagonal dT/deps (both current elasticity models): with
+            // d_j = dT_j/deps_j and w_s = dgdot_dtau[s],
+            //   dDp[i][j] = d_j * M_ij,  M_ij = sum_s P_is w_s P_js (symmetric)
+            //   dWp[k][j] = d_j * sum_s Q_ks w_s P_js
+            // which needs neither the ntvec x nslip dtaua_deps nor the
+            // dgdot_deps temporaries, and only the 15 unique M entries.
+            // Same values as below up to rounding (different association).
+            constexpr int ns = SlipGeom::nslip;
+            double d[ecmech::ntvec];
+            thermoElastN.dTdepsDiag(d, inv_a_vol);
+            const double* const P = slip_geom.getP();
+            const double* const Q = slip_geom.getQ();
+            for (int iT = 0; iT < ecmech::ntvec; ++iT) {
+                double pw[ns];
+                for (int s = 0; s < ns; ++s) { pw[s] = P[ECMECH_NM_INDX(iT, s, ecmech::ntvec, ns)] * dgdot_dtau[s]; }
+                for (int jT = iT; jT < ecmech::ntvec; ++jT) {
+                    double m = 0.0;
+                    for (int s = 0; s < ns; ++s) { m += pw[s] * P[ECMECH_NM_INDX(jT, s, ecmech::ntvec, ns)]; }
+                    dDp_hat_delast_strain[ECMECH_NM_INDX(iT, jT, ecmech::ntvec, ecmech::ntvec)] = d[jT] * m;
+                    dDp_hat_delast_strain[ECMECH_NM_INDX(jT, iT, ecmech::ntvec, ecmech::ntvec)] = d[iT] * m;
+                }
+            }
+            for (int iW = 0; iW < ecmech::nwvec; ++iW) {
+                double qw[ns];
+                for (int s = 0; s < ns; ++s) { qw[s] = Q[ECMECH_NM_INDX(iW, s, ecmech::nwvec, ns)] * dgdot_dtau[s]; }
+                for (int jT = 0; jT < ecmech::ntvec; ++jT) {
+                    double m = 0.0;
+                    for (int s = 0; s < ns; ++s) { m += qw[s] * P[ECMECH_NM_INDX(jT, s, ecmech::ntvec, ns)]; }
+                    dWp_hat_delast_strain[ECMECH_NM_INDX(iW, jT, ecmech::nwvec, ecmech::ntvec)] = d[jT] * m;
+                }
+            }
+            return;
+        }
         double dtaua_deps[ ecmech::ntvec * SlipGeom::nslip ];
         thermoElastN.multDTDepsT(dtaua_deps, slip_geom.getP(), inv_a_vol, SlipGeom::nslip);
 
