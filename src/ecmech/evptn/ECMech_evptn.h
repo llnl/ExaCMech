@@ -433,7 +433,36 @@ namespace ecmech {
                double plastic_def_rate_d5[ecmech::ntvec] = { 0.0 };
                double plastic_spin_vec[ecmech::nwvec] = { 0.0 }; // \pcDhat
 
-               get_slip_rate_terms(dgdot_dtau, plastic_def_rate_d5, plastic_spin_vec, kirchoff, m_kin_vals, m_slipGeom, m_kinetics);
+               // The kinetics (slip rates and their derivatives) are the
+               // expensive part of this evaluation. After the solve, the
+               // tangent stiffness evaluates again at the converged x and
+               // postprocessing needs the slip rates at the same state, so the
+               // most recent kinetics results are kept and reused when x is
+               // bitwise identical. Any other x (e.g. a rejected trial point)
+               // recomputes them.
+#if defined(ECMECH_NO_KCACHE)
+               bool reuse = false;
+#else
+               bool reuse = m_kc_valid;
+#endif
+               for (int iX = 0; reuse && iX < nDimSys; ++iX) {
+                  reuse = (x[iX] == m_kc_x[iX]);
+               }
+               if (reuse) {
+                  for (int i = 0; i < SlipGeom::nslip; ++i) { dgdot_dtau[i] = m_kc_dgdot_dtau[i]; }
+                  for (int i = 0; i < ecmech::ntvec; ++i) { plastic_def_rate_d5[i] = m_kc_pl_d5[i]; }
+                  for (int i = 0; i < ecmech::nwvec; ++i) { plastic_spin_vec[i] = m_kc_pl_spin[i]; }
+               }
+               else {
+                  get_slip_rate_terms(dgdot_dtau, plastic_def_rate_d5, plastic_spin_vec, kirchoff, m_kin_vals, m_slipGeom, m_kinetics,
+                                      m_kc_gdot, m_kc_rss);
+                  for (int iX = 0; iX < nDimSys; ++iX) { m_kc_x[iX] = x[iX]; }
+                  for (int i = 0; i < ecmech::ntvec; ++i) { m_kc_elast[i] = elast_d5_f[i]; }
+                  for (int i = 0; i < SlipGeom::nslip; ++i) { m_kc_dgdot_dtau[i] = dgdot_dtau[i]; }
+                  for (int i = 0; i < ecmech::ntvec; ++i) { m_kc_pl_d5[i] = plastic_def_rate_d5[i]; }
+                  for (int i = 0; i < ecmech::nwvec; ++i) { m_kc_pl_spin[i] = plastic_spin_vec[i]; }
+                  m_kc_valid = true;
+               }
 
                // Higher-order terms related to the elasticity stuff that's used in the residuals and jacobian calculation
                double A_e_M35[ecmech::nwvec * ecmech::ntvec];
@@ -572,6 +601,30 @@ namespace ecmech {
                                        const double* const elast_strain
                                       )
             {
+               // Reuse the last kinetics evaluation if it was at this elastic
+               // strain (the converged state); same values as recomputing.
+#if defined(ECMECH_NO_KCACHE)
+               bool reuse = false;
+#else
+               bool reuse = m_kc_valid;
+#endif
+               for (int i = 0; reuse && i < ecmech::ntvec; ++i) {
+                  reuse = (elast_strain[i] == m_kc_elast[i]);
+               }
+               if (reuse) {
+                  pl_disipation_rate = 0.0;
+                  effective_shear_rate = 0.0;
+                  if constexpr (SlipGeom::nslip > 0) {
+                     for (int i = 0; i < SlipGeom::nslip; ++i) { gdot[i] = m_kc_gdot[i]; }
+#if defined(ECMECH_USE_DPEFF)
+                     effective_shear_rate = vecd_Deff(m_kc_pl_d5);
+#else
+                     effective_shear_rate = vecsssumabs<SlipGeom::nslip>(gdot);
+#endif
+                     pl_disipation_rate = m_lattice_strain_prob.m_inv_det_v_e * vecsyadotb<SlipGeom::nslip>(m_kc_rss, gdot);
+                  }
+                  return;
+               }
                get_slip_contributions(pl_disipation_rate, effective_shear_rate, gdot,
                                       m_lattice_strain_prob.m_inv_det_v_e, elast_strain, m_kin_vals,
                                       m_slipGeom, m_kinetics, m_lattice_strain_prob);
@@ -607,6 +660,17 @@ namespace ecmech {
             static constexpr size_t m_i_sub_r = ecmech::ntvec;
             /** @brief Pointer to material tangent stiffness (nullptr if not computing) */
             double* m_mtan_sI;
+
+            // Kinetics results of the most recent computeRJ (see computeRJ)
+            static constexpr size_t m_nslip_dyn = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
+            bool m_kc_valid = false;
+            double m_kc_x[nDimSys];
+            double m_kc_elast[ecmech::ntvec];
+            double m_kc_dgdot_dtau[SlipGeom::nslip > 0 ? SlipGeom::nslip : 1];
+            double m_kc_gdot[SlipGeom::nslip > 0 ? SlipGeom::nslip : 1];
+            double m_kc_rss[m_nslip_dyn > 0 ? m_nslip_dyn : 1];
+            double m_kc_pl_d5[ecmech::ntvec];
+            double m_kc_pl_spin[ecmech::nwvec];
       }; // class EvptnUpdstProblem
 
 #if defined(ECMECH_EXTRA_SOLVERS)

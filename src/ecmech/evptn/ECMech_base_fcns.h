@@ -168,7 +168,9 @@ namespace evptn {
                             const double* const kirchoff,
                             const double* const kinetic_values,
                             const SlipGeom& slip_geom,
-                            const SlipKinetics& slip_kinetics
+                            const SlipKinetics& slip_kinetics,
+                            double* const gdot_out = nullptr,
+                            double* const rss_out = nullptr
                             )
     {        
         if constexpr (SlipGeom::nslip > 0) {
@@ -192,6 +194,14 @@ namespace evptn {
         // CALL sum_slip_def(plastic_def_rate_d5, plastic_spin_vec, crys%tmp1_slp, crys) ;
         vecsVMa<ntvec, SlipGeom::nslip>(plastic_def_rate_d5, slip_geom.getP(), gdot);
         vecsVMa<nwvec, SlipGeom::nslip>(plastic_spin_vec, slip_geom.getQ(), gdot);
+        // Optional copies for callers that reuse this evaluation (see
+        // EvptnUpdstProblem's kinetics cache).
+        if (gdot_out) {
+            for (int i = 0; i < SlipGeom::nslip; ++i) { gdot_out[i] = gdot[i]; }
+        }
+        if (rss_out) {
+            for (size_t i = 0; i < nslip_dyn; ++i) { rss_out[i] = abs_resolved_shear_stress[i]; }
+        }
         }
     }
 
