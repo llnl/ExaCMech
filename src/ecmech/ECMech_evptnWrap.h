@@ -39,6 +39,9 @@
 
 #include "ECMech_matModelBase.h"
 #include "evptn/ECMech_evptnSngl.h"
+#if defined(ECMECH_SIMD_EXPT)
+#include "simd/ECMech_simd_evptn.h"
+#endif
 
 #include "ECMech_unused.h"
 
@@ -631,6 +634,26 @@ namespace ecmech {
                if (!m_complete) {
                   ECMECH_FAIL(__func__, "not complete");
                }
+
+#if defined(ECMECH_SIMD_EXPT)
+               // Experiment: SIMD across points on the CPU/OpenMP backends (ECMECH_SIMD=1)
+               if constexpr (simd::simd_supported<SlipGeom, Kinetics, ThermoElastN>::value) {
+                  if (m_accel != ECM_EXEC_STRAT_GPU && simd::simdEnabled()) {
+                     simd::getResponseSimd<SlipGeom, Kinetics, ThermoElastN, EosModel>
+                        (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, dt, m_tolerance,
+                         def_rate_d6vV, m_strides[istride_def_rate], spin_vecV, m_strides[istride_spin_v],
+                         rel_vol_ratiosV, m_strides[istride_vol_ratio], internal_energyV, m_strides[istride_int_eng],
+                         cauchy_stress_d6pV, m_strides[istride_stress], histV, m_strides[istride_history],
+                         tkelvV, m_strides[istride_tkelv], sddV, m_strides[istride_sdd], mtanSDV,
+                         nPassed, m_accel == ECM_EXEC_STRAT_OPENMP);
+                     if (this->reduceStatus(histV, nPassed)) {
+                        getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
+                                         cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+                     }
+                     return;
+                  }
+               }
+#endif
 
 #if defined(ECMECH_SNLS_TEAM) && defined(__ecmech_gpu_active__)
                if (m_accel == ECM_EXEC_STRAT_GPU) {
