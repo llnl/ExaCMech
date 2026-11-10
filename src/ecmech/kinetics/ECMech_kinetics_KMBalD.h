@@ -518,10 +518,11 @@ namespace ecmech {
          evalGdots(R* const gdot,
                    R* const dgdot_dtau,
                    const R* const tau,
-                   const R* const vals
+                   const R* const vals,
+                   const int first = 0, const int stride = 1 // slip systems first, first + stride, ...
                    ) const
          {
-            for (int iSlip = 0; iSlip<this->nslip; ++iSlip) {
+            for (int iSlip = first; iSlip < this->nslip; iSlip += stride) {
                mask_t<R> l_act;
                this->evalGdot(gdot[iSlip], l_act, dgdot_dtau[iSlip],
                               vals, iSlip,

@@ -39,7 +39,7 @@
 
 #include "ECMech_matModelBase.h"
 #include "evptn/ECMech_evptnSngl.h"
-#if defined(ECMECH_SIMD_EXPT)
+#if defined(ECMECH_SIMD_EXPT) || defined(ECMECH_GPU_PACK_EXPT)
 #include "simd/ECMech_simd_evptn.h"
 #endif
 
@@ -635,17 +635,61 @@ namespace ecmech {
                   ECMECH_FAIL(__func__, "not complete");
                }
 
+#if defined(ECMECH_SIMD_EXPT) || defined(ECMECH_GPU_PACK_EXPT)
+               const simd::PackArrays packArrays{dt, m_tolerance,
+                  def_rate_d6vV, m_strides[istride_def_rate], spin_vecV, m_strides[istride_spin_v],
+                  rel_vol_ratiosV, m_strides[istride_vol_ratio], internal_energyV, m_strides[istride_int_eng],
+                  cauchy_stress_d6pV, m_strides[istride_stress], histV, m_strides[istride_history],
+                  tkelvV, m_strides[istride_tkelv], sddV, m_strides[istride_sdd], mtanSDV, nPassed};
+#endif
 #if defined(ECMECH_SIMD_EXPT)
                // Experiment: SIMD across points on the CPU/OpenMP backends (ECMECH_SIMD=1)
                if constexpr (simd::simd_supported<SlipGeom, Kinetics, ThermoElastN>::value) {
                   if (m_accel != ECM_EXEC_STRAT_GPU && simd::simdEnabled()) {
                      simd::getResponseSimd<SlipGeom, Kinetics, ThermoElastN, EosModel>
-                        (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, dt, m_tolerance,
-                         def_rate_d6vV, m_strides[istride_def_rate], spin_vecV, m_strides[istride_spin_v],
-                         rel_vol_ratiosV, m_strides[istride_vol_ratio], internal_energyV, m_strides[istride_int_eng],
-                         cauchy_stress_d6pV, m_strides[istride_stress], histV, m_strides[istride_history],
-                         tkelvV, m_strides[istride_tkelv], sddV, m_strides[istride_sdd], mtanSDV,
-                         nPassed, m_accel == ECM_EXEC_STRAT_OPENMP);
+                        (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, packArrays, m_accel == ECM_EXEC_STRAT_OPENMP);
+                     if (this->reduceStatus(histV, nPassed)) {
+                        getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
+                                         cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+                     }
+                     return;
+                  }
+               }
+#endif
+#if defined(ECMECH_TEAM_SPLIT_EXPT) && defined(__ecmech_gpu_active__)
+               // Experiment: NT threads per point, splitting the slip-system work (ECMECH_TEAM_SPLIT=NT)
+               if (m_accel == ECM_EXEC_STRAT_GPU && teamSplitSize() > 1) {
+                  bool ran = true;
+                  switch (teamSplitSize()) {
+                     case 4: getResponseTeamSplit<4>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     case 8: getResponseTeamSplit<8>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     case 16: getResponseTeamSplit<16>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     case 32: getResponseTeamSplit<32>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed); break;
+                     default: ran = false; break;
+                  }
+                  if (ran) {
+                     if (this->reduceStatus(histV, nPassed)) {
+                        getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
+                                         cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+                     }
+                     return;
+                  }
+               }
+#endif
+#if defined(ECMECH_GPU_PACK_EXPT) && defined(__ecmech_gpu_active__)
+               // Experiment: N points per GPU thread (ECMECH_GPU_PACK=2 or 4)
+               // or warp-uniform lanes, one point per thread (ECMECH_GPU_WARP=1)
+               if (m_accel == ECM_EXEC_STRAT_GPU && (gpuPackSize() > 1 || gpuWarpLanes())) {
+                  bool ran = true;
+                  if (gpuWarpLanes()) { ran = getResponseGpuPack<ecmech::dpack<1, true>>(packArrays); }
+                  else {
+                     switch (gpuPackSize()) {
+                        case 2: ran = getResponseGpuPack<ecmech::dpack<2>>(packArrays); break;
+                        case 4: ran = getResponseGpuPack<ecmech::dpack<4>>(packArrays); break;
+                        default: ran = false; break;
+                     }
+                  }
+                  if (ran) {
                      if (this->reduceStatus(histV, nPassed)) {
                         getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
                                          cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
@@ -852,6 +896,40 @@ namespace ecmech {
                int* counter = m_persistCounter.data(chai::ExecutionSpace::GPU);
                snls::forall<1>(0, 1, [=] __ecmech_hdev__ (int) { counter[0] = 0; });
 
+               // ECMECH_PERSIST_SIMPLE=1: refill per point instead of per Newton step:
+               // each worker takes the next point from the queue and solves it with
+               // getResponseSngl (the warp's threads then run the same solver loop on
+               // different points at different iterations)
+               static const bool simple = std::getenv("ECMECH_PERSIST_SIMPLE") != nullptr;
+               if (simple) {
+                  snls::forall<ECMECH_GPU_THREADS>(0, nWorkers, [=] __ecmech_hdev__ (int)
+                  {
+                     auto slipGeom_tmp = slipGeom;
+                     while (true) {
+                        const int i = RAJA::atomicAdd<RAJA::auto_atomic>(counter, 1);
+                        if (i >= nPassed) { break; }
+                        double *mtanSDThis = (mtanSDV ? &mtanSDV[ecmech::nsvec2 * i] : nullptr);
+                        auto get_response = [&] (const SlipGeom& slip_geom) -> bool {
+                           return getResponseSngl<SlipGeom, Kinetics, ThermoElastN, EosModel>
+                           (slip_geom, *kinetics, *elastN, *eosModel, dt, tolerance,
+                            &def_rate_d6vV[def_rate_stride * i], &spin_vecV[spin_v_stride * i],
+                            &rel_vol_ratiosV[vol_ratio_stride * i], &internal_energyV[int_eng_stride * i],
+                            &cauchy_stress_d6pV[stress_stride * i], &histV[history_stride * i],
+                            tkelvV[tkelv_stride * i], &sddV[sdd_stride * i], mtanSDThis, outputLevel);
+                        };
+                        bool status;
+                        if constexpr (SlipGeom::dynamic) {
+                           SlipGeom slip_geom = *slipGeom_tmp;
+                           status = get_response(slip_geom);
+                        } else {
+                           status = get_response(*slipGeom_tmp);
+                        }
+                        if (!status) { histV[history_stride * i + iHistA_nFEval] *= -1; }
+                     }
+                  });
+                  return;
+               }
+
                using PP = evptn::PersistentPoint<SlipGeom, Kinetics, ThermoElastN, EosModel>;
                snls::forall<ECMECH_GPU_THREADS>(0, nWorkers, [=] __ecmech_hdev__ (int)
                {
@@ -905,6 +983,144 @@ namespace ecmech {
 
             /// One thread per point: the original getResponse kernel, with the
             /// GPU block size as a template parameter.
+#if defined(ECMECH_GPU_PACK_EXPT) && defined(__ecmech_gpu_active__)
+            /// Experiment: points per GPU thread, read once from ECMECH_GPU_PACK
+            __ecmech_host__
+            static int gpuPackSize()
+            {
+               static const int n = [] {
+                  const char* env = std::getenv("ECMECH_GPU_PACK");
+                  return env ? std::atoi(env) : 1;
+               }();
+               return n;
+            }
+
+            /// Experiment: warp-uniform lanes (ECMECH_GPU_WARP=1)
+            __ecmech_host__
+            static bool gpuWarpLanes()
+            {
+               static const bool on = std::getenv("ECMECH_GPU_WARP") != nullptr;
+               return on;
+            }
+
+            /// Experiment: getResponse with value type R per GPU thread (simd::getResponsePack;
+            /// R = dpack<N>: N points per thread; dpack<1, true>: one point, warp-uniform
+            /// control flow); false if the model is not supported.
+            template<class R>
+            __ecmech_host__
+            bool getResponseGpuPack(const simd::PackArrays& a) const
+            {
+               constexpr int N = lanes_of<R>();
+               if constexpr (simd::pack_supported<SlipGeom, Kinetics, ThermoElastN, R>::value) {
+                  if (a.history_stride > (unsigned)simd::maxPackHist) {
+                     ECMECH_FAIL(__func__, "GPU pack path: history too long for the padding scratch");
+                  }
+                  const auto slipGeom = m_slipGeom;
+                  const auto kinetics = m_kinetics;
+                  const auto elastN = m_elastN;
+                  const auto eosModel = m_eosModel;
+                  const simd::PackArrays arrays = a; // (nvcc: no first capture of `a` inside if constexpr)
+                  const int nPacks = (a.nPassed + N - 1) / N;
+                  snls::forall<ECMECH_GPU_THREADS>(0, nPacks, [=] __ecmech_hdev__ (int ip) {
+                     simd::getResponsePack<R>(ip, *slipGeom, *kinetics, *elastN, *eosModel, arrays);
+                  });
+                  return true;
+               }
+               else {
+                  return false;
+               }
+            }
+#endif
+
+#if defined(ECMECH_TEAM_SPLIT_EXPT) && defined(__ecmech_gpu_active__)
+            /// Experiment: threads per point for the team split, from ECMECH_TEAM_SPLIT
+            __ecmech_host__
+            static int teamSplitSize()
+            {
+               static const int n = [] {
+                  const char* env = std::getenv("ECMECH_TEAM_SPLIT");
+                  return env ? std::atoi(env) : 1;
+               }();
+               return n;
+            }
+
+            /// Experiment: NT threads per point (one team per GPU block). Every thread
+            /// runs the whole point (bit-identically); the slip-system kinetics and the
+            /// slip-rate derivative rows are split across the team (evptn::SlipTeam).
+            /// Thread 0 writes the results, the others work on copies.
+            template<int NT>
+            __ecmech_host__
+            void getResponseTeamSplit(const double & dt,
+                                      const double * def_rate_d6vV,
+                                      const double * spin_vecV,
+                                      const double * rel_vol_ratiosV,
+                                      double * internal_energyV,
+                                      double * cauchy_stress_d6pV,
+                                      double * histV,
+                                      double * tkelvV,
+                                      double * sddV,
+                                      double * mtanSDV,
+                                      const int& nPassed) const
+            {
+               const unsigned int def_rate_stride = m_strides[istride_def_rate];
+               const unsigned int spin_v_stride = m_strides[istride_spin_v];
+               const unsigned int vol_ratio_stride = m_strides[istride_vol_ratio];
+               const unsigned int int_eng_stride = m_strides[istride_int_eng];
+               const unsigned int stress_stride = m_strides[istride_stress];
+               const unsigned int history_stride = m_strides[istride_history];
+               const unsigned int tkelv_stride = m_strides[istride_tkelv];
+               const unsigned int sdd_stride = m_strides[istride_sdd];
+               if (history_stride > 128 || stress_stride > 8 || int_eng_stride > 8 || sdd_stride > 8) {
+                  ECMECH_FAIL(__func__, "team split: per-thread copies too small");
+               }
+               const auto slipGeom = m_slipGeom;
+               const auto kinetics = m_kinetics;
+               const auto elastN = m_elastN;
+               const auto eosModel = m_eosModel;
+               const auto tolerance = m_tolerance;
+               const auto outputLevel = m_outputLevel;
+               snls::forall_team<NT, NT>(0, nPassed, [=] __ecmech_hdev__ (int i, int tid, int nthreads, int, snls::TeamConsensus&)
+               {
+                  constexpr int ns = SlipGeom::nslip;
+                  RAJA_TEAM_SHARED double sh[2 * ns + ecmech::ntvec * ecmech::ntvec + ecmech::nwvec * ecmech::ntvec];
+                  const evptn::SlipTeam team{tid, nthreads, &sh[0], &sh[ns], &sh[2 * ns]};
+                  // thread 0 on the point's arrays, the others on copies
+                  double histC[128], stressC[8], energyC[8], sddC[8], tC, mtanC[ecmech::nsvec2];
+                  double* hist = &histV[history_stride * i];
+                  double* stress = &cauchy_stress_d6pV[stress_stride * i];
+                  double* energy = &internal_energyV[int_eng_stride * i];
+                  double* sdd = &sddV[sdd_stride * i];
+                  double* tk = &tkelvV[tkelv_stride * i];
+                  double* mtan = (mtanSDV ? &mtanSDV[ecmech::nsvec2 * i] : nullptr);
+                  if (tid != 0) {
+                     for (unsigned int k = 0; k < history_stride; ++k) { histC[k] = hist[k]; }
+                     for (unsigned int k = 0; k < stress_stride; ++k) { stressC[k] = stress[k]; }
+                     for (unsigned int k = 0; k < int_eng_stride; ++k) { energyC[k] = energy[k]; }
+                     for (unsigned int k = 0; k < sdd_stride; ++k) { sddC[k] = sdd[k]; }
+                     tC = *tk;
+                     hist = histC; stress = stressC; energy = energyC; sdd = sddC; tk = &tC;
+                     if (mtan) { mtan = mtanC; }
+                  }
+                  auto get_response = [&] (const SlipGeom& slip_geom) -> bool {
+                     return getResponseSngl<SlipGeom, Kinetics, ThermoElastN, EosModel>
+                     (slip_geom, *kinetics, *elastN, *eosModel, dt, tolerance,
+                      &def_rate_d6vV[def_rate_stride * i], &spin_vecV[spin_v_stride * i],
+                      &rel_vol_ratiosV[vol_ratio_stride * i], energy, stress, hist, *tk, sdd, mtan,
+                      outputLevel, &team);
+                  };
+                  bool status;
+                  auto slipGeom_tmp = slipGeom;
+                  if constexpr (SlipGeom::dynamic) {
+                     SlipGeom slip_geom = *slipGeom_tmp;
+                     status = get_response(slip_geom);
+                  } else {
+                     status = get_response(*slipGeom_tmp);
+                  }
+                  if (tid == 0 && !status) { hist[iHistA_nFEval] *= -1; }
+               });
+            }
+#endif
+
             template<int BLOCK>
             __ecmech_host__
             void getResponseSolo(const double & dt,

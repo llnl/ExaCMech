@@ -317,7 +317,7 @@ namespace ecmech {
       Prob prob(kinetics, &hs_o[0], &hs_o[n], nu, dt);
       snls::TrDeltaControl deltaControl;
       deltaControl._deltaInit = 1e0;
-      if constexpr (lanes_of<R>() == 1) {
+      if constexpr (snls::is_scalar_value<R>()) {
          snls::SNLSTrDlDenseG<Prob> solver(prob);
          solver.setupSolver(100, 1e-10, &deltaControl, outputLevel);
          for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
@@ -838,10 +838,11 @@ namespace ecmech {
          evalGdots(R* const gdot,
                    R* const dgdot_dtau,
                    const R* const tau,
-                   const R* const vals
+                   const R* const vals,
+                   const int first = 0, const int stride = 1 // slip systems first, first + stride, ...
                    ) const
          {
-            for (int iSlip = 0; iSlip<this->nslip; ++iSlip) {
+            for (int iSlip = first; iSlip < this->nslip; iSlip += stride) {
                mask_t<R> l_act;
                this->evalGdot(gdot[iSlip], l_act, dgdot_dtau[iSlip],
                               vals, iSlip,
@@ -1302,6 +1303,7 @@ namespace ecmech {
          /// of points: hs_u gets the new densities; returns the points
          /// that converged.
          template<class R>
+         __ecmech_hdev__
          inline
          mask_t<R> updateHLanes(R* const hs_u, const R* const hs_o, double dt, const R* const gdot) const
          {

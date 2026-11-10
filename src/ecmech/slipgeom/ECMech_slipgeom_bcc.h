@@ -938,7 +938,7 @@ namespace ecmech {
                  taua[iSlip] = select(second, tau_s[1], tau_s[0]);
                  taua[iSlip] = select(taua[iSlip] < 0.0, R(0.0), taua[iSlip]);
                  
-                 if constexpr (lanes_of<R>() == 1) { // P and Q are filled per point (getPQ)
+                 if constexpr (snls::is_scalar_value<R>()) { // P and Q are filled per point (getPQ)
                  const int iS = second ? 1 : 0;
                  if (fill_PQ) {
                      for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {

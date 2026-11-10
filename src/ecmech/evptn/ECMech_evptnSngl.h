@@ -743,7 +743,11 @@ bool getResponseSngl(const SlipGeom& slipGeom,
                      double& tkelv,
                      double* const sdd,
                      double* const mtanSD,
-                     int outputLevel = 0)
+                     int outputLevel = 0
+#if defined(ECMECH_TEAM_SPLIT_EXPT)
+                     , const SlipTeam* const team = nullptr
+#endif
+                     )
 {
     auto prob_state = ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>(hist, cauchy_stress_d6p, tkelv, def_rate_d6v_sample, spin_vec_sample, rel_vol_ratios, dt);
 
@@ -755,6 +759,9 @@ bool getResponseSngl(const SlipGeom& slipGeom,
     double cauchy_stress_d5p_xtal[ecmech::nsvec];
     {
         EvptnUpdstProblem prob(slipGeom, kinetics, elastN, prob_state);
+#if defined(ECMECH_TEAM_SPLIT_EXPT)
+        prob.m_team = team;
+#endif
 
         // Solver update of things
         {
