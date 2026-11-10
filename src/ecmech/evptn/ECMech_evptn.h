@@ -68,6 +68,8 @@
 #ifndef ECMECH_EVPTN_H
 #define ECMECH_EVPTN_H
 
+#include <type_traits>
+
 #include <cassert>
 
 #include "ECMech_core.h"
@@ -77,6 +79,13 @@
 
 namespace ecmech {
    namespace evptn {
+
+      /// Kinetics::reuseEvaluations if the kinetics class declares it, true otherwise
+      template<class K, class = void>
+      struct kinetics_reuse_evaluations : std::true_type {};
+      template<class K>
+      struct kinetics_reuse_evaluations<K, std::void_t<decltype(K::reuseEvaluations)>>
+         : std::integral_constant<bool, K::reuseEvaluations> {};
 
       /**
        * @brief Coupled elastic strain and lattice rotation update problem.
@@ -440,11 +449,7 @@ namespace ecmech {
                // most recent kinetics results are kept and reused when x is
                // bitwise identical. Any other x (e.g. a rejected trial point)
                // recomputes them.
-#if defined(ECMECH_NO_KCACHE)
-               bool reuse = false;
-#else
-               bool reuse = m_kc_valid;
-#endif
+               bool reuse = m_kc_on && m_kc_valid;
                for (int iX = 0; reuse && iX < nDimSys; ++iX) {
                   reuse = (x[iX] == m_kc_x[iX]);
                }
@@ -455,13 +460,15 @@ namespace ecmech {
                }
                else {
                   get_slip_rate_terms(dgdot_dtau, plastic_def_rate_d5, plastic_spin_vec, kirchoff, m_kin_vals, m_slipGeom, m_kinetics,
-                                      m_kc_gdot, m_kc_rss);
-                  for (int iX = 0; iX < nDimSys; ++iX) { m_kc_x[iX] = x[iX]; }
-                  for (int i = 0; i < ecmech::ntvec; ++i) { m_kc_elast[i] = elast_d5_f[i]; }
-                  for (int i = 0; i < SlipGeom::nslip; ++i) { m_kc_dgdot_dtau[i] = dgdot_dtau[i]; }
-                  for (int i = 0; i < ecmech::ntvec; ++i) { m_kc_pl_d5[i] = plastic_def_rate_d5[i]; }
-                  for (int i = 0; i < ecmech::nwvec; ++i) { m_kc_pl_spin[i] = plastic_spin_vec[i]; }
-                  m_kc_valid = true;
+                                      m_kc_on ? m_kc_gdot : nullptr, m_kc_on ? m_kc_rss : nullptr);
+                  if constexpr (m_kc_on) {
+                     for (int iX = 0; iX < nDimSys; ++iX) { m_kc_x[iX] = x[iX]; }
+                     for (int i = 0; i < ecmech::ntvec; ++i) { m_kc_elast[i] = elast_d5_f[i]; }
+                     for (int i = 0; i < SlipGeom::nslip; ++i) { m_kc_dgdot_dtau[i] = dgdot_dtau[i]; }
+                     for (int i = 0; i < ecmech::ntvec; ++i) { m_kc_pl_d5[i] = plastic_def_rate_d5[i]; }
+                     for (int i = 0; i < ecmech::nwvec; ++i) { m_kc_pl_spin[i] = plastic_spin_vec[i]; }
+                     m_kc_valid = true;
+                  }
                }
 
                // Higher-order terms related to the elasticity stuff that's used in the residuals and jacobian calculation
@@ -603,11 +610,7 @@ namespace ecmech {
             {
                // Reuse the last kinetics evaluation if it was at this elastic
                // strain (the converged state); same values as recomputing.
-#if defined(ECMECH_NO_KCACHE)
-               bool reuse = false;
-#else
-               bool reuse = m_kc_valid;
-#endif
+               bool reuse = m_kc_on && m_kc_valid;
                for (int i = 0; reuse && i < ecmech::ntvec; ++i) {
                   reuse = (elast_strain[i] == m_kc_elast[i]);
                }
@@ -661,16 +664,24 @@ namespace ecmech {
             /** @brief Pointer to material tangent stiffness (nullptr if not computing) */
             double* m_mtan_sI;
 
-            // Kinetics results of the most recent computeRJ (see computeRJ)
+            // Kinetics results of the most recent computeRJ (see computeRJ).
+            // On unless the kinetics opts out (Kinetics::reuseEvaluations) or
+            // ECMECH_NO_KCACHE is defined; when off, nothing is stored and the
+            // arrays shrink to one element.
+#if defined(ECMECH_NO_KCACHE)
+            static constexpr bool m_kc_on = false;
+#else
+            static constexpr bool m_kc_on = kinetics_reuse_evaluations<Kinetics>::value;
+#endif
             static constexpr size_t m_nslip_dyn = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
             bool m_kc_valid = false;
-            double m_kc_x[nDimSys];
-            double m_kc_elast[ecmech::ntvec];
-            double m_kc_dgdot_dtau[SlipGeom::nslip > 0 ? SlipGeom::nslip : 1];
-            double m_kc_gdot[SlipGeom::nslip > 0 ? SlipGeom::nslip : 1];
-            double m_kc_rss[m_nslip_dyn > 0 ? m_nslip_dyn : 1];
-            double m_kc_pl_d5[ecmech::ntvec];
-            double m_kc_pl_spin[ecmech::nwvec];
+            double m_kc_x[(m_kc_on && (nDimSys) > 0) ? (nDimSys) : 1];
+            double m_kc_elast[(m_kc_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
+            double m_kc_dgdot_dtau[(m_kc_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
+            double m_kc_gdot[(m_kc_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
+            double m_kc_rss[(m_kc_on && (m_nslip_dyn) > 0) ? (m_nslip_dyn) : 1];
+            double m_kc_pl_d5[(m_kc_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
+            double m_kc_pl_spin[(m_kc_on && (ecmech::nwvec) > 0) ? (ecmech::nwvec) : 1];
       }; // class EvptnUpdstProblem
 
 #if defined(ECMECH_EXTRA_SOLVERS)

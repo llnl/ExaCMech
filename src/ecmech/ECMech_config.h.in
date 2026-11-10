@@ -20,3 +20,4 @@
 /** @brief Enables the alternate evptn nonlinear-solve formulations (elastic-strain-only and rotation-only sub-problems in evptn/ECMech_evptn.h) that are not needed by the primary combined strain+rotation solve. Set via the CMake option of the same name. */
 #cmakedefine ECMECH_EXTRA_SOLVERS
 #cmakedefine ECMECH_SNLS_TEAM
+#cmakedefine ECMECH_VOCE_NO_KINETICS_REUSE
