@@ -1,97 +1,25 @@
 #pragma once
 /**
  * @file ECMech_simd_pack.h
- * @brief Experiment (ECMECH_SIMD_EXPT, CPU only): the pack value type, W
- * points in one std::experimental::native_simd<double> (W = 4 with AVX2),
- * plugged into the value-type layer (SNLS_value_type.h), and vector math.
+ * @brief CPU SIMD path (ECMECH_SIMD_EXPT): the pack value type, W points in
+ * one snls::simd::pack<W> (SNLS_pack.h: plain arrays that the compiler
+ * vectorizes, standard C++17, per-lane math functions).
+ *
+ * W defaults to the ISA's double width (8 with AVX-512, 4 with AVX, else 2);
+ * -DECMECH_SIMD_LANES=N overrides it.
  */
 
-#if defined(ECMECH_SIMD_INHOUSE)
-// S4 review prototype: SNLS's in-house pack type (GNU vector extensions,
-// libmvec math) instead of libstdc++'s std::experimental::simd
 #include "SNLS_pack.h"
+
 namespace ecmech {
 namespace simd {
-constexpr int W = (ECMECH_SIMD_INHOUSE > 1) ? ECMECH_SIMD_INHOUSE : snls::simd::pack_native_lanes();
+#if defined(ECMECH_SIMD_LANES)
+constexpr int W = ECMECH_SIMD_LANES;
+#else
+constexpr int W = snls::simd::pack_native_lanes();
+#endif
 using vdouble = snls::simd::pack<W>;
 using vmask = snls::simd::pack_mask<W>;
 } // namespace simd
 // (the math functions for packs are found by argument-dependent lookup)
 } // namespace ecmech
-#else
-#include <experimental/simd>
-#include <cmath>
-#include <immintrin.h>
-#include "SNLS_value_type.h"
-
-namespace ecmech {
-namespace simd {
-namespace stdx = std::experimental;
-using vdouble = stdx::native_simd<double>;
-using vmask = vdouble::mask_type;
-constexpr int W = static_cast<int>(vdouble::size());
-} // namespace simd
-} // namespace ecmech
-
-namespace snls {
-template<>
-struct value_traits<ecmech::simd::vdouble> {
-   using R = ecmech::simd::vdouble;
-   using mask = ecmech::simd::vmask;
-   using index = R; // pivot rows, held as doubles
-   static constexpr int lanes = ecmech::simd::W;
-   [[gnu::always_inline]] static inline R select(const mask& m, const R& a, const R& b) {
-      R r = b; ecmech::simd::stdx::where(m, r) = a; return r;
-   }
-   static inline double get(const R& v, int l) { return v[l]; }
-   static inline void set(R& v, int l, double x) { v[l] = x; }
-   static inline R gather(const R* const b, const index& i) {
-#if defined(__AVX2__) && !defined(__AVX512F__)
-      // lane l of b[i_l] is the double at offset 4 i_l + l
-      const __m256d off = _mm256_add_pd(_mm256_mul_pd(static_cast<__m256d>(i), _mm256_set1_pd(4.0)),
-                                        _mm256_set_pd(3.0, 2.0, 1.0, 0.0));
-      return R(_mm256_i32gather_pd(reinterpret_cast<const double*>(b), _mm256_cvtpd_epi32(off), 8));
-#else
-      R r;
-      for (int l = 0; l < lanes; ++l) { r[l] = b[static_cast<int>(i[l])][l]; }
-      return r;
-#endif
-   }
-};
-template<>
-struct mask_traits<ecmech::simd::vmask> {
-   using M = ecmech::simd::vmask;
-   static inline bool any(const M& m) { return ecmech::simd::stdx::any_of(m); }
-   static inline bool all(const M& m) { return ecmech::simd::stdx::all_of(m); }
-   static inline bool get(const M& m, int l) { return m[l]; }
-   static inline void set(M& m, int l, bool x) { m[l] = x; }
-};
-} // namespace snls
-
-namespace ecmech {
-// Unqualified exp/log/pow/sin/cos in namespace ecmech find these first, so
-// the double overloads are brought in alongside (same functions as ::exp).
-using std::exp; using std::log; using std::pow; using std::sin; using std::cos;
-// Vector versions from glibc's libmvec (link -lmvec); libstdc++'s
-// <experimental/simd> evaluates these one lane at a time. Non-template, so
-// they win over the std::experimental templates found by ADL. libmvec is
-// accurate to a few ulp, so pack results differ from double at rounding.
-#if defined(__AVX2__) && !defined(__AVX512F__) && !defined(ECMECH_SIMD_NO_MVEC)
-} // namespace ecmech
-#include <immintrin.h>
-extern "C" __m256d _ZGVdN4v_exp(__m256d);
-extern "C" __m256d _ZGVdN4v_log(__m256d);
-extern "C" __m256d _ZGVdN4v_sin(__m256d);
-extern "C" __m256d _ZGVdN4v_cos(__m256d);
-extern "C" __m256d _ZGVdN4vv_pow(__m256d, __m256d);
-namespace ecmech {
-using simd::vdouble;
-inline vdouble exp(const vdouble& x) { return vdouble(_ZGVdN4v_exp(static_cast<__m256d>(x))); }
-inline vdouble log(const vdouble& x) { return vdouble(_ZGVdN4v_log(static_cast<__m256d>(x))); }
-inline vdouble sin(const vdouble& x) { return vdouble(_ZGVdN4v_sin(static_cast<__m256d>(x))); }
-inline vdouble cos(const vdouble& x) { return vdouble(_ZGVdN4v_cos(static_cast<__m256d>(x))); }
-inline vdouble pow(const vdouble& x, const vdouble& y) { return vdouble(_ZGVdN4vv_pow(static_cast<__m256d>(x), static_cast<__m256d>(y))); }
-inline vdouble pow(const vdouble& x, double y) { return pow(x, vdouble(y)); }
-#endif
-} // namespace ecmech
-#endif // ECMECH_SIMD_INHOUSE

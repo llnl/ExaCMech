@@ -1,17 +1,9 @@
 #pragma once
 /**
  * @file ECMech_simd_evptn.h
- * @brief Experiment (ECMECH_SIMD_EXPT, CPU only): getResponse for W points
- * at a time with the pack value type (simd/ECMech_simd_pack.h).
- *
- * There is no SIMD copy of the model here: the problem is the original
- * evptn::EvptnUpdstProblem instantiated on a pack problem state, its
- * kinetics/elasticity/slip geometry are the original classes (templated on
- * the value type), and the Newton solve is SNLS's SNLSTrDlDenseG_Lanes,
- * built from the same kernels as SNLSTrDlDenseG. What is here is the
- * per-pack driver: gather the points into a pack, solve, scatter back.
- * Preprocess (EOS, and the hardness update unless the kinetics can do it on
- * packs) and postprocess run per point with the original code.
+ * @brief CPU SIMD path (ECMECH_SIMD_EXPT, run time ECMECH_SIMD=1): the
+ * CPU/OpenMP launcher that runs evptn::getResponseLanes (the one getResponse
+ * driver, ECMech_evptnLanes.h) on packs of W points (simd/ECMech_simd_pack.h).
  */
 
 #if defined(ECMECH_SIMD_EXPT)
@@ -21,7 +13,7 @@
 #include <cstdlib>
 #include <type_traits>
 #include <vector>
-#if defined(ECMECH_SIMD_EXPT) && (defined(ECMECH_SIMD_INHOUSE) || !defined(__CUDA_ARCH__))
+#if defined(ECMECH_SIMD_EXPT)
 #include "simd/ECMech_simd_pack.h"
 #endif
 #include "evptn/ECMech_evptnSngl.h"
