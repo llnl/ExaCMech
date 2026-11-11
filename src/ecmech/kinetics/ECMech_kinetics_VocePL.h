@@ -343,8 +343,30 @@ namespace ecmech {
          }
 
          /**
-          * @brief Power-law slip rate of one slip system (value type R: one
-          * point or a pack, see ECMech_value_type.h).
+          * @brief Evaluate the power-law slip rate and its derivative on a single slip
+          * system:
+          *
+          *   γ̇ = γ̇_w · (|τ| / g)^(1/m) · sign(τ)
+          *   ∂γ̇/∂τ = (1/m) · (γ̇/τ)
+          *
+          * where γ̇ = `gdot`, γ̇_w = `m_gam_w`, τ = `tau`, g = `gIn`, and m = `m_xm`.
+          *
+          * The stress ratio |τ/g| (`at`) is compared against thresholds derived from
+          * #gam_ratio_min/#gam_ratio_ovf (via `m_t_min`/`m_t_max`): below `m_t_min` the
+          * system is treated as inactive (`gdot = 0`); above `m_t_max` the rate is capped
+          * at `gam_ratio_ovffx * gam_w` rather than allowed to overflow, with derivatives
+          * left at zero.
+          * @param[out] gdot Slip rate γ̇ [1/time].
+          * @param[out] l_act `true` if the slip system is active (stress ratio above
+          * `m_t_min`).
+          * @param[out] dgdot_dtau Derivative of `gdot` w.r.t. resolved shear stress.
+          * @param gIn Current CRSS (flow strength) for this slip system, g.
+          * @param tau Resolved shear stress τ [stress units].
+          * @param mu Shear modulus; not currently used.
+          * Value type R: one point (double) or a pack of points (see
+          * ECMech_value_type.h).
+          * Per-point branches use masks; `log_where`/`exp_where` evaluate only
+          * the points that take the power-law branch.
           */
          template<class R>
          __ecmech_hdev__

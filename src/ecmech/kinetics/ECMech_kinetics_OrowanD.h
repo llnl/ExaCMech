@@ -852,8 +852,26 @@ namespace ecmech {
          }
 
          /**
-          * @brief MTS activation-energy function (see the scalar notes in the
-          * class documentation); value type R (one point or a pack).
+          * @brief Evaluate the MTS activation-energy function E(t) = -c_e·[1 -
+          * sign(t)·|t|^p]^q and its derivative factor, for a single (signed)
+          * dimensionless MTS argument -- see the "MTS thermal-activation energy
+          * function" section in the file-level documentation in
+          * ECMech_kinetics_OrowanD.h.
+          *
+          * Handles three regimes: `t` near zero (linearizes to avoid a 0/0 in the
+          * derivative when `pOne` is false), `q_arg = 1 - p_func` at or below zero
+          * (barrier fully overcome -- "pegged" to `E = 0`), and the general case.
+          * @param[out] exp_arg E(t), the log of the thermal-activation rate factor.
+          * @param[out] mts_dfac Derivative helper factor; combined with the caller's own
+          * chain-rule terms to get `d(exp(E))/dτ`.
+          * @param c_e Thermal energy prefactor c_e (= c_t·μ).
+          * @param denom_i 1/g_MTS, the reciprocal of whichever stress is currently
+          * playing the MTS-normalizing role.
+          * @param t_frac The dimensionless MTS argument t.
+          * Value type R: one point (double) or a pack of points (see
+          * ECMech_value_type.h).
+          * @param active The points that need the result (true for one point);
+          * pow() is evaluated only for them.
           */
          template<class R>
          __ecmech_hdev__

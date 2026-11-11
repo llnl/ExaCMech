@@ -158,8 +158,7 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    [[maybe_unused]] double padHist[WP][one ? 1 : maxPackHist], padStress[WP][8], padEnergy[WP][8], padSdd[WP][8], padT[WP];
    alignas(PS) unsigned char psMem[W][sizeof(PS)];
    PS* ps[W];
-   // dynamic slip geometries: one copy per point (as getResponseSolo makes per thread)
-   alignas(SlipGeom) unsigned char geomMem[dynamicGeom ? W : 1][sizeof(SlipGeom)];
+   alignas(SlipGeom) unsigned char geomMem[(dynamicGeom && !one) ? W : 1][(dynamicGeom && !one) ? sizeof(SlipGeom) : 1];
    const SlipGeom* geom[W];
    bool ok[W];
    double halfVMidDt[W], devE[W];
@@ -185,7 +184,9 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
       }
       ps[l] = new (psMem[l]) PS(histL[l], stressL[l], *tL[l], &a.def_rate_d6vV[a.def_rate_stride * i],
                                 &a.spin_vecV[a.spin_v_stride * i], &a.rel_vol_ratiosV[a.vol_ratio_stride * i], dt);
-      if constexpr (dynamicGeom) { geom[l] = new (geomMem[l]) SlipGeom(slipGeom); }
+      // dynamic slip geometries: a copy per lane of a pack; one point uses the
+      // caller's geometry, as getResponseSngl always did
+      if constexpr (dynamicGeom && !one) { geom[l] = new (geomMem[l]) SlipGeom(slipGeom); }
       else { geom[l] = &slipGeom; }
       ok[l] = preprocess<SlipGeom, Kinetics, EosModel, ThermoElastN, PS, false, hardeningOnPacks>
                  (*geom[l], kinetics, eos, elastN, &a.rel_vol_ratiosV[a.vol_ratio_stride * i],
@@ -319,7 +320,7 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
                   cauchy_stress_d5p_xtal, devE[l], halfVMidDt[l]);
       p.~PS();
    }
-   if constexpr (dynamicGeom) { for (int l = 0; l < W; ++l) { geom[l]->~SlipGeom(); } }
+   if constexpr (dynamicGeom && !one) { for (int l = 0; l < W; ++l) { geom[l]->~SlipGeom(); } }
    return converged;
 }
 
