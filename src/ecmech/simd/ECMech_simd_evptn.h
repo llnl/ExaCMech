@@ -339,6 +339,12 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
 
    // ECMECH_SIMD_DPACK=2|4: the dpack<N> value type (the GPU's) on the CPU, for testing
    static const int dpackN = std::getenv("ECMECH_SIMD_DPACK") ? std::atoi(std::getenv("ECMECH_SIMD_DPACK")) : 0;
+   if (dpackN == 1) {
+      // S4 review: the pack driver with R = double (one point at a time)
+      #pragma omp parallel for schedule(static) if (useOpenMP)
+      for (int ip = 0; ip < a.nPassed; ++ip) { getResponsePack<double>(ip, slipGeom, kinetics, elastN, eos, a); }
+      return;
+   }
    if (dpackN == 2 || dpackN == 4) {
       const int np = (a.nPassed + dpackN - 1) / dpackN;
       #pragma omp parallel for schedule(static) if (useOpenMP)

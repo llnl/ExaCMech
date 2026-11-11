@@ -679,9 +679,12 @@ namespace ecmech {
 #if defined(ECMECH_GPU_PACK_EXPT) && defined(__ecmech_gpu_active__)
                // Experiment: N points per GPU thread (ECMECH_GPU_PACK=2 or 4)
                // or warp-uniform lanes, one point per thread (ECMECH_GPU_WARP=1)
-               if (m_accel == ECM_EXEC_STRAT_GPU && (gpuPackSize() > 1 || gpuWarpLanes())) {
+               static const bool driver1 = std::getenv("ECMECH_GPU_DRIVER1") != nullptr;
+               if (m_accel == ECM_EXEC_STRAT_GPU && (gpuPackSize() > 1 || gpuWarpLanes() || driver1)) {
                   bool ran = true;
-                  if (gpuWarpLanes()) { ran = getResponseGpuPack<ecmech::dpack<1, true>>(packArrays); }
+                  // S4 review: the pack driver with R = double as the one-point path
+                  if (driver1) { ran = getResponseGpuPack<double>(packArrays); }
+                  else if (gpuWarpLanes()) { ran = getResponseGpuPack<ecmech::dpack<1, true>>(packArrays); }
                   else {
                      switch (gpuPackSize()) {
                         case 2: ran = getResponseGpuPack<ecmech::dpack<2>>(packArrays); break;
