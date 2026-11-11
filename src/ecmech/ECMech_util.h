@@ -143,6 +143,25 @@
 
 /** @} */ // end of array_indexing group
 
+/**
+ * @def ECMECH_HOST_RESTRICT
+ * @brief `__restrict` on the output array of the small matrix products, in
+ * host code only. It tells the CPU compiler that the output does not alias
+ * the inputs, so each partial sum stays in a register instead of being
+ * stored and reloaded after every term (a store-forwarding chain). Empty in
+ * device passes (the GPU code is unchanged) and for compilers without the
+ * keyword. Callers must not pass an output that overlaps an input (these
+ * functions zero or overwrite the output first, so such a call was never
+ * valid).
+ */
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#define ECMECH_HOST_RESTRICT
+#elif defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER) || defined(__INTEL_COMPILER)
+#define ECMECH_HOST_RESTRICT __restrict
+#else
+#define ECMECH_HOST_RESTRICT
+#endif
+
 namespace ecmech {
 
 /**
@@ -462,7 +481,7 @@ namespace ecmech {
     */
    template<int n, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVMTa(R* const p,
+   inline void vecsVMTa(R* ECMECH_HOST_RESTRICT const p,
                         const T1* const M,
                         const T2* const v) {
       for (int i = 0; i<n; ++i) {
@@ -489,7 +508,7 @@ namespace ecmech {
     */
    template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVaTM(R* const p,
+   inline void vecsVaTM(R* ECMECH_HOST_RESTRICT const p,
                         const T1* const a,
                         const T2* const M) {
       for (int iQ = 0; iQ<q; ++iQ) {
@@ -515,7 +534,7 @@ namespace ecmech {
     */
    template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVMa(R* const p,
+   inline void vecsVMa(R* ECMECH_HOST_RESTRICT const p,
                        const T1* const M,
                        const T2* const a) {
       for (int iN = 0; iN<n; ++iN) {
@@ -540,7 +559,7 @@ namespace ecmech {
     */
    template<int n, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsVMa(R* const p,
+   inline void vecsVMa(R* ECMECH_HOST_RESTRICT const p,
                        const T1* const M,
                        const T2* const a) {
       for (int iN = 0; iN<n; ++iN) {
@@ -570,7 +589,7 @@ namespace ecmech {
     */
    template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsMABT(R* const P,
+   inline void vecsMABT(R* ECMECH_HOST_RESTRICT const P,
                         const T1* const A,
                         const T2* const B)
    {
@@ -607,7 +626,7 @@ namespace ecmech {
     */
    template<int n, int m, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsMABT(R* const P,
+   inline void vecsMABT(R* ECMECH_HOST_RESTRICT const P,
                         const T1* const A,
                         const T2* const B) {
       for (int ij = 0; ij<n * m; ++ij) {
@@ -642,7 +661,7 @@ namespace ecmech {
     */
    template<int n, int m, int q, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void vecsMAB(R* const P,
+   inline void vecsMAB(R* ECMECH_HOST_RESTRICT const P,
                        const T1* const A,
                        const T2* const B) {
       for (int ij = 0; ij<n * m; ++ij) {
@@ -2233,7 +2252,7 @@ namespace ecmech {
     */
    template<int n, bool l_T, class R, class T1, class T2>
    __ecmech_hdev__
-   inline void qr6x6_pre_mul(R* const M_out, // 6xn
+   inline void qr6x6_pre_mul(R* ECMECH_HOST_RESTRICT const M_out, // 6xn
                  const T1* const M_in, // 6xn
                  const T2* const qr5x5 // 5x5
                  )
