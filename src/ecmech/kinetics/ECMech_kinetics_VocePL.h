@@ -328,12 +328,11 @@ namespace ecmech {
          evalGdots(R* const gdot,
                    R* const dgdot_dtau,
                    const R* const tau,
-                   const R* const vals,
-                   const int first = 0, const int stride = 1 // slip systems first, first + stride, ...
+                   const R* const vals
                    ) const
          {
             R gAll = vals[0];
-            for (int iSlip = first; iSlip < this->nslip; iSlip += stride) {
+            for (int iSlip = 0; iSlip < this->nslip; ++iSlip) {
                mask_t<R> l_act;
                this->evalGdot(gdot[iSlip], l_act, dgdot_dtau[iSlip],
                               gAll,
@@ -378,9 +377,9 @@ namespace ecmech {
                }
                const auto pl = act && !(at > m_t_max);
                if (any(pl)) {
-                  const R abslog = log(select(pl, at, R(one)));
+                  const R abslog = log_where(pl, at);
                   const R blog = m_xn * abslog;
-                  const R temp = m_gam_w * exp(blog);
+                  const R temp = m_gam_w * exp_where(pl, blog);
                   const R g = temp * t_frac;
                   set_where(pl, gdot, g);
                   set_where(pl, dgdot_dtau, m_xnn * g / select(pl, tau, R(one)));

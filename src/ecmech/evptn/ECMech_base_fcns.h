@@ -162,19 +162,6 @@ namespace evptn {
      * @see slip_geom.evalRSS() for resolved shear stress calculation
      * @see slip_kinetics.evalGdots() for slip rate evaluation
      */
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-    /// Experiment (ECMECH_TEAM_SPLIT_EXPT): a team of threads that all evaluate
-    /// the same point (bit-identically); the per-slip-system kinetics and the
-    /// rows of the slip-rate derivative sums are split across the team through
-    /// team-shared arrays and team barriers (one team per GPU block).
-    struct SlipTeam {
-        int tid;
-        int nthreads;
-        double* gdot;       ///< team-shared, nslip
-        double* dgdot_dtau; ///< team-shared, nslip
-        double* dpl;        ///< team-shared, ntvec*ntvec + nwvec*ntvec
-    };
-#endif
 
     template<class SlipGeom, class SlipKinetics, class R, class T1, class T2>
     __ecmech_hdev__
@@ -188,9 +175,6 @@ namespace evptn {
                             const SlipKinetics& slip_kinetics,
                             R* const gdot_out = nullptr,
                             R* const rss_out = nullptr
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-                            , const SlipTeam* const team = nullptr
-#endif
                             )
     {        
         if constexpr (SlipGeom::nslip > 0) {
@@ -209,19 +193,6 @@ namespace evptn {
         // CALL plaw_eval(plastic_def_rate_d5, plastic_spin_vec, gss, crys, tkelv, ierr)
         // chi values are passed within extended taua array
         bool split = false;
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-        if constexpr (snls::is_scalar_value<R>()) {
-            if (team) {
-                // each thread its slip systems, then everyone reads all of them
-                split = true;
-                slip_kinetics.evalGdots(gdot, dgdot_dtau, abs_resolved_shear_stress, kinetic_values, team->tid, team->nthreads);
-                for (int i = team->tid; i < SlipGeom::nslip; i += team->nthreads) { team->gdot[i] = gdot[i]; team->dgdot_dtau[i] = dgdot_dtau[i]; }
-                RAJA::LaunchContext{}.teamSync();
-                for (int i = 0; i < SlipGeom::nslip; ++i) { gdot[i] = team->gdot[i]; dgdot_dtau[i] = team->dgdot_dtau[i]; }
-                RAJA::LaunchContext{}.teamSync();
-            }
-        }
-#endif
         if (!split) {
             slip_kinetics.evalGdots(gdot, dgdot_dtau, abs_resolved_shear_stress, kinetic_values);
         }
@@ -310,9 +281,6 @@ namespace evptn {
                                     const T2 inv_a_vol,
                                     const SlipGeom& slip_geom,
                                     const ThermoElastN& thermoElastN
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-                                    , const SlipTeam* const team = nullptr
-#endif
                                 )
     {
         if constexpr (SlipGeom::nslip > 0) {
@@ -332,14 +300,6 @@ namespace evptn {
             int rowFirst = 0, rowStride = 1;
             R* dDp = dDp_hat_delast_strain;
             R* dWp = dWp_hat_delast_strain;
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-            if constexpr (snls::is_scalar_value<R>()) {
-                if (team) { // each thread its rows, into the team-shared arrays
-                    rowFirst = team->tid; rowStride = team->nthreads;
-                    dDp = team->dpl; dWp = team->dpl + ecmech::ntvec * ecmech::ntvec;
-                }
-            }
-#endif
             for (int iT = rowFirst; iT < ecmech::ntvec; iT += rowStride) {
                 R pw[ns];
                 for (int s = 0; s < ns; ++s) { pw[s] = P[ECMECH_NM_INDX(iT, s, ecmech::ntvec, ns)] * dgdot_dtau[s]; }
@@ -359,16 +319,6 @@ namespace evptn {
                     dWp[ECMECH_NM_INDX(iW, jT, ecmech::nwvec, ecmech::ntvec)] = d[jT] * m;
                 }
             }
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-            if constexpr (snls::is_scalar_value<R>()) {
-                if (team) {
-                    RAJA::LaunchContext{}.teamSync();
-                    for (int k = 0; k < ecmech::ntvec * ecmech::ntvec; ++k) { dDp_hat_delast_strain[k] = team->dpl[k]; }
-                    for (int k = 0; k < ecmech::nwvec * ecmech::ntvec; ++k) { dWp_hat_delast_strain[k] = team->dpl[ecmech::ntvec * ecmech::ntvec + k]; }
-                    RAJA::LaunchContext{}.teamSync();
-                }
-            }
-#endif
             return;
         }
         R dtaua_deps[ ecmech::ntvec * SlipGeom::nslip ];

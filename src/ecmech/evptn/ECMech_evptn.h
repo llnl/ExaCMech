@@ -513,9 +513,6 @@ namespace ecmech {
                else {
                   get_slip_rate_terms(dgdot_dtau, plastic_def_rate_d5, plastic_spin_vec, kirchoff, m_kin_vals, m_slipGeom, m_kinetics,
                                       m_kc_on ? m_kc_gdot : nullptr, m_kc_on ? m_kc_rss : nullptr
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-                                      , m_team
-#endif
                                       );
                   if constexpr (m_kc_on) {
                      for (int iX = 0; iX < nDimSys; ++iX) { m_kc_x[iX] = x[iX]; }
@@ -550,9 +547,6 @@ namespace ecmech {
                   R dpl_deps_symm[ ecmech::ntvec * ecmech::ntvec ] = { 0.0 };
                   R dpl_deps_skew[ ecmech::nwvec * ecmech::ntvec ] = { 0.0 };
                   get_slip_rate_deriv_terms(dpl_deps_symm, dpl_deps_skew, dgdot_dtau, m_lattice_strain_prob.m_inv_a_vol, m_slipGeom, m_lattice_strain_prob.m_thermo_elast_n
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-                                            , m_team
-#endif
                                             );
 
                   // derivatives with respect to lattice orientation changes
@@ -742,11 +736,6 @@ namespace ecmech {
             R m_kc_rss[(m_kc_on && (m_nslip_dyn) > 0) ? (m_nslip_dyn) : 1];
             R m_kc_pl_d5[(m_kc_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
             R m_kc_pl_spin[(m_kc_on && (ecmech::nwvec) > 0) ? (ecmech::nwvec) : 1];
-#if defined(ECMECH_TEAM_SPLIT_EXPT)
-         public:
-            /// experiment: the team this point's evaluation is split across (see SlipTeam)
-            const SlipTeam* m_team = nullptr;
-#endif
       }; // class EvptnUpdstProblem
 
 #if defined(ECMECH_EXTRA_SOLVERS)

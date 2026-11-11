@@ -838,11 +838,10 @@ namespace ecmech {
          evalGdots(R* const gdot,
                    R* const dgdot_dtau,
                    const R* const tau,
-                   const R* const vals,
-                   const int first = 0, const int stride = 1 // slip systems first, first + stride, ...
+                   const R* const vals
                    ) const
          {
-            for (int iSlip = first; iSlip < this->nslip; iSlip += stride) {
+            for (int iSlip = 0; iSlip < this->nslip; ++iSlip) {
                mask_t<R> l_act;
                this->evalGdot(gdot[iSlip], l_act, dgdot_dtau[iSlip],
                               vals, iSlip,
@@ -863,7 +862,8 @@ namespace ecmech {
          get_mts_dG(R &exp_arg,
                     R &mts_dfac,
                     const R& c_e, const R& denom_i,
-                    const R& t_frac) const {
+                    const R& t_frac,
+                    const mask_t<R>& active) const { // active: the points that need the result
             mts_dfac = c_e * denom_i;
 
             R p_func = t_frac;
@@ -874,10 +874,10 @@ namespace ecmech {
                   set_where(tiny, mts_dfac, mts_dfac * 1e10); // blow up
                }
                if (m_p != one) { // the m_p == one case keeps p_func = t_frac
-                  const auto gen = !tiny;
+                  const auto gen = active && !tiny;
                   if (any(gen)) {
                      const R t_s = select(gen, t_frac, R(one));
-                     R pf = pow(fabs(t_s), m_p);
+                     R pf = pow_where(gen, fabs(t_s), m_p);
                      pf = copysign(pf, t_s);
                      set_where(gen, p_func, pf);
                      set_where(gen, mts_dfac, mts_dfac * m_p * pf / t_s);
@@ -889,10 +889,10 @@ namespace ecmech {
             const auto qsmall = (q_arg < idp_tiny_sqrt);
             R pq_fac = q_arg;
             if (!qOne && m_q != one) {
-               const auto gen = !qsmall;
+               const auto gen = active && !qsmall;
                if (any(gen)) {
                   const R q_s = select(gen, q_arg, R(one));
-                  const R temp = pow(fabs(q_s), m_q);
+                  const R temp = pow_where(gen, fabs(q_s), m_q);
                   set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_s));
                   set_where(gen, pq_fac, copysign(temp, q_s));
                }
@@ -991,7 +991,7 @@ namespace ecmech {
                   set_where(lin, temp, one - exp_arg);
                }
                if (any(!lin)) {
-                  const R e = exp(-exp_arg);
+                  const R e = exp_where(!done && !lin, -exp_arg);
                   set_where(!lin, temp, e);
                   set_where(!lin, gdot_r, gam_r * (one - e));
                }
@@ -1016,7 +1016,7 @@ namespace ecmech {
                const R c_e = c_t * mu;
                const R t_frac = (fabs(tau) - gAth) * g_i;
                R exp_arg, mts_dfac;
-               get_mts_dG(exp_arg, mts_dfac, c_e, g_i, t_frac);
+               get_mts_dG(exp_arg, mts_dfac, c_e, g_i, t_frac, !done);
 
                done = done || (exp_arg < ln_gam_ratio_min);
                if (all(done)) {
@@ -1025,17 +1025,17 @@ namespace ecmech {
                }
 
                // !!! gdot_w = gam_w * exp(exp_arg)
-               gdot_w = gam_w * exp(exp_arg);
+               gdot_w = gam_w * exp_where(!done, exp_arg);
                dgdot_w_dtau = mts_dfac * gdot_w;
 
                const R t_frac_m = (-fabs(tau) - gAth) * g_i;
                R exp_arg_m, mts_dfac_m;
-               get_mts_dG(exp_arg_m, mts_dfac_m, c_e, g_i, t_frac_m);
+               get_mts_dG(exp_arg_m, mts_dfac_m, c_e, g_i, t_frac_m, !done);
 
                const auto back = !done && (exp_arg_m > ln_gam_ratio_min);
                if (any(back)) {
                   // non-vanishing contribution from balancing MTS-like kinetics
-                  const R gdot_w_m = gam_w * exp(exp_arg_m);
+                  const R gdot_w_m = gam_w * exp_where(back, exp_arg_m);
                   set_where(back, gdot_w, gdot_w - gdot_w_m);
                   const R contrib = mts_dfac_m * gdot_w_m;
                   set_where(back, dgdot_w_dtau, dgdot_w_dtau - contrib);
@@ -1050,9 +1050,9 @@ namespace ecmech {
             const auto pl = !done && (at_0 > t_min);
             if (any(pl)) {
                // need power-law part
-               const R abslog = log(select(pl, at_0, R(one)));
+               const R abslog = log_where(pl, at_0);
                const R blog = xn * abslog;
-               const R temp = (gam_w * gdot_w_pl_scaling) * exp(blog);
+               const R temp = (gam_w * gdot_w_pl_scaling) * exp_where(pl, blog);
 
                const R gdot_w_pl = temp * at_0; // not signed
                set_where(pl, gdot_w, gdot_w + gdot_w_pl);

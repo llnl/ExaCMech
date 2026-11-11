@@ -443,12 +443,11 @@ namespace ecmech {
          evalGdots(R* const gdot,
                    R* const dgdot_dtau,
                    const R* const tau,
-                   const R* const vals,
-                   const int first = 0, const int stride = 1 // slip systems first, first + stride, ...
+                   const R* const vals
                    ) const
          {
             double tkelv = 0.0;
-            for (int iSlip = first; iSlip < m_num_slip; iSlip += stride) {
+            for (int iSlip = 0; iSlip < m_num_slip; ++iSlip) {
                mask_t<R> l_act;
                const R taua = tau[iSlip];
                const R chia = tau[SlipGeom::nslip + iSlip];

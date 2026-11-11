@@ -21,6 +21,9 @@ namespace ecmech {
    using snls::any;
    using snls::all;
    using snls::set_where;
+   using snls::exp_where;
+   using snls::log_where;
+   using snls::pow_where;
    using snls::merge_mask;
    using snls::all_lanes;
    using snls::no_lanes;
