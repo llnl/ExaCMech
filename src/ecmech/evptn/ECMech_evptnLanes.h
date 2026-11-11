@@ -7,7 +7,7 @@
 
 #include <new>
 #include <type_traits>
-#include "SNLS_TrDLDenseG_Lanes.h"
+#include "SNLS_TrDLDenseG.h"
 
 namespace ecmech {
 namespace evptn {
@@ -138,7 +138,7 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    constexpr bool dynamicGeom = SlipGeom::dynamic;
    using GeomV = std::conditional_t<dynamicGeom && !one, SlipGeomPack<SlipGeom, R>, SlipGeom>;
    using Prob = EvptnUpdstProblem<GeomV, Kinetics, ThermoElastN, PSV>;
-   using Solver = snls::SNLSTrDlDenseG_Lanes<Prob, R>;
+   using Solver = snls::SNLSTrDlDenseG<Prob, Prob::nDimSys, R>;
    constexpr bool hardeningOnPacks = !one && has_pack_hardening<Kinetics, R>::value;
    constexpr int nH = Kinetics::nH;
    constexpr int nslip = SlipGeom::nslip;
@@ -256,11 +256,11 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    solver.setupSolver(200, a.tolerance, &deltaControl);
    for (int k = 0; k < n; ++k) { solver._x[k] = 0.0; }
    solver.solve(active0);
-   converged = solver.converged;
+   converged = solver.getConverged();
    if (fevalsOut) {
       int mx = 0;
       for (int l = 0; l < W; ++l) {
-         const int f = (real[l] && ok[l]) ? solver.fevals[l] : 0;
+         const int f = (real[l] && ok[l]) ? solver.getNFEvals(l) : 0;
          fevalsOut[l] = f;
          mx = (f > mx) ? f : mx;
       }
@@ -303,7 +303,7 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
       }
       for (int k = 0; k < ecmech::ntvec; ++k) { p.elast_d5_u[k] = lane(elast_d5_u[k], l); }
       for (int k = 0; k < ecmech::qdim; ++k) { p.quat_u[k] = lane(quat_u[k], l); }
-      histL[l][iHistA_nFEval] = solver.fevals[l] + (a.mtanSDV ? 1 : 0);
+      histL[l][iHistA_nFEval] = solver.getNFEvals(l) + (a.mtanSDV ? 1 : 0);
       for (int k = 0; k < nH; ++k) { p.h_state[k] = p.h_state_u[k]; }
       for (int k = 0; k < nslip; ++k) { p.gdot[k] = lane(gdot[k], l); }
       p.eps_dot = lane(effective_shear_rate, l);

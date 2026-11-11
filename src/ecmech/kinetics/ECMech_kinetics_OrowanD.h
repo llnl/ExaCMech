@@ -206,7 +206,6 @@
 
 #include "RAJA/RAJA.hpp"
 #include "SNLS_TrDLDenseG.h"
-#include "SNLS_TrDLDenseG_Lanes.h"
 
 namespace ecmech {
    /**
@@ -301,7 +300,7 @@ namespace ecmech {
    /// as updateHN; returns the number of function evaluations or -1.
    /// For one point (R = double) returns the number of function
    /// evaluations (-1 on failure), as before; for a pack of points (solved
-   /// in lockstep with SNLSTrDlDenseG_Lanes) returns the points that converged.
+   /// in lockstep by SNLSTrDlDenseG) returns the points that converged.
    template<class Kinetics, class R = double>
    __ecmech_hdev__
    inline
@@ -317,23 +316,17 @@ namespace ecmech {
       Prob prob(kinetics, &hs_o[0], &hs_o[n], nu, dt);
       snls::TrDeltaControl deltaControl;
       deltaControl._deltaInit = 1e0;
+      snls::SNLSTrDlDenseG<Prob, Prob::nDimSys, R> solver(prob);
+      solver.setupSolver(100, 1e-10, &deltaControl, outputLevel);
+      for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
+      const snls::SNLSStatus_t status = solver.solve();
+      prob.getHn(hs_n, solver._x);
       if constexpr (snls::is_scalar_value<R>()) {
-         snls::SNLSTrDlDenseG<Prob> solver(prob);
-         solver.setupSolver(100, 1e-10, &deltaControl, outputLevel);
-         for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
-         const snls::SNLSStatus_t status = solver.solve();
-         int nFevals = solver.getNFEvals();
-         if (status != snls::converged) { nFevals = -1; }
-         prob.getHn(hs_n, solver._x);
-         return nFevals;
+         return (status == snls::converged) ? solver.getNFEvals() : -1;
       }
       else {
-         snls::SNLSTrDlDenseG_Lanes<Prob, R> solver(prob);
-         solver.setupSolver(100, 1e-10, &deltaControl);
-         for (int iX = 0; iX < n; ++iX) { solver._x[iX] = 0e0; }
-         solver.solve(all_lanes<R>());
-         prob.getHn(hs_n, solver._x);
-         return solver.converged;
+         (void) status;
+         return solver.getConverged();
       }
    }
 
