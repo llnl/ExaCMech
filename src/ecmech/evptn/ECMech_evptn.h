@@ -257,10 +257,10 @@ namespace ecmech {
                m_epsdot_scale_inv = zero;
                const auto lowRate = (eff < epsdot_scl_nzeff * adots_ref);
                if (any(lowRate)) {
-                  set_where(lowRate, m_epsdot_scale_inv, R(one / adots_ref));
+                  set_where(lowRate, m_epsdot_scale_inv, one / adots_ref);
                }
                if (any(!lowRate)) {
-                  set_where(!lowRate, m_epsdot_scale_inv, R(fmin(one / eff, R(1e6 * m_lattice_strain_prob.m_dt))));
+                  set_where(!lowRate, m_epsdot_scale_inv, fmin(one / eff, R(1e6 * m_lattice_strain_prob.m_dt)));
                }
                //
                m_rotincr_scale_inv = m_lattice_strain_prob.m_inv_dt * m_epsdot_scale_inv;

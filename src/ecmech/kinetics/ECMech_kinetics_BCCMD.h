@@ -506,7 +506,7 @@ namespace ecmech {
                l_act = act;
                const auto ovf = act && (at > m_t_max);
                if (any(ovf)) {
-                  set_where(ovf, gdot, R(copysign(R(ecmech::gam_ratio_ovffx * gam_w), tau)));
+                  set_where(ovf, gdot, copysign(R(ecmech::gam_ratio_ovffx * gam_w), tau));
                }
                const auto pl = act && !(at > m_t_max);
                if (any(pl)) {

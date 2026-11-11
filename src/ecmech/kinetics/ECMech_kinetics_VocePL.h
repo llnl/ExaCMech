@@ -374,7 +374,7 @@ namespace ecmech {
                const auto ovf = act && (at > m_t_max);
                if (any(ovf)) {
                   // ML_ERROR_RETURN_VAL_IF(exp_arg > ln_gam_ratio_ovf, ...
-                  set_where(ovf, gdot, R(copysign(R(ecmech::gam_ratio_ovffx * m_gam_w), tau)));
+                  set_where(ovf, gdot, copysign(R(ecmech::gam_ratio_ovffx * m_gam_w), tau));
                }
                const auto pl = act && !(at > m_t_max);
                if (any(pl)) {
@@ -383,7 +383,7 @@ namespace ecmech {
                   const R temp = m_gam_w * exp(blog);
                   const R g = temp * t_frac;
                   set_where(pl, gdot, g);
-                  set_where(pl, dgdot_dtau, R(m_xnn * g / select(pl, tau, R(one))));
+                  set_where(pl, dgdot_dtau, m_xnn * g / select(pl, tau, R(one)));
                }
             }
          } // evalGdot

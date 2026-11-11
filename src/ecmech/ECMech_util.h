@@ -1185,7 +1185,7 @@ namespace ecmech {
       const auto big = (inv[0] > idp_tiny_sqrt);
       if (any(big)) {
          const R invInv = 1.0 / select(big, inv[0], R(1.0));
-         for (int i = 0; i < emapdim; ++i) { set_where(big, inv[1 + i], R(invInv * emap[i])); }
+         for (int i = 0; i < emapdim; ++i) { set_where(big, inv[1 + i], invInv * emap[i]); }
       } // else, emap is effectively zero, so axis does not matter
       inv_to_quat(quat, inv);
    }
@@ -1651,21 +1651,21 @@ namespace ecmech {
       const auto tiny = (fabs(theta) < idp_tiny_sqrt);
       const auto axis = !tiny; // n from emap
       if (any(small)) {
-         set_where(small, sthhbyth, R(onehalf - theta * theta * oo48)); // truncated Taylor seriers; probably safe to just use onehalf and be done with it
-         set_where(small, halfsthh, R(theta * oneqrtr)); // truncated Taylor seriers
+         set_where(small, sthhbyth, onehalf - theta * theta * oo48); // truncated Taylor seriers; probably safe to just use onehalf and be done with it
+         set_where(small, halfsthh, theta * oneqrtr); // truncated Taylor seriers
       }
       if (any(tiny)) {
          // n is arbitrary, as theta is effectively zero
-         set_where(tiny, na, R(one)); set_where(tiny, nb, R(zero)); set_where(tiny, nc, R(zero));
+         set_where(tiny, na, one); set_where(tiny, nb, zero); set_where(tiny, nc, zero);
       }
       if (any(!small)) {
          const R s = sin(theta * onehalf);
-         set_where(!small, sthhbyth, R(s / select(small, R(one), theta)));
-         set_where(!small, halfsthh, R(s * onehalf));
+         set_where(!small, sthhbyth, s / select(small, R(one), theta));
+         set_where(!small, halfsthh, s * onehalf);
       }
       if (any(axis)) {
          const R theta_inv = one / select(axis, theta, R(one));
-         set_where(axis, na, R(emap[0] * theta_inv)); set_where(axis, nb, R(emap[1] * theta_inv)); set_where(axis, nc, R(emap[2] * theta_inv));
+         set_where(axis, na, emap[0] * theta_inv); set_where(axis, nb, emap[1] * theta_inv); set_where(axis, nc, emap[2] * theta_inv);
       }
       //
       const R halfcthh = cos(theta * onehalf) * onehalf;

@@ -870,8 +870,8 @@ namespace ecmech {
             if (!pOne) {
                const auto tiny = (fabs(t_frac) < idp_tiny_sqrt);
                if (any(tiny)) {
-                  set_where(tiny, p_func, R(zero));
-                  set_where(tiny, mts_dfac, R(mts_dfac * 1e10)); // blow up
+                  set_where(tiny, p_func, zero);
+                  set_where(tiny, mts_dfac, mts_dfac * 1e10); // blow up
                }
                if (m_p != one) { // the m_p == one case keeps p_func = t_frac
                   const auto gen = !tiny;
@@ -880,7 +880,7 @@ namespace ecmech {
                      R pf = pow(fabs(t_s), m_p);
                      pf = copysign(pf, t_s);
                      set_where(gen, p_func, pf);
-                     set_where(gen, mts_dfac, R(mts_dfac * m_p * pf / t_s));
+                     set_where(gen, mts_dfac, mts_dfac * m_p * pf / t_s);
                   }
                }
             }
@@ -893,23 +893,36 @@ namespace ecmech {
                if (any(gen)) {
                   const R q_s = select(gen, q_arg, R(one));
                   const R temp = pow(fabs(q_s), m_q);
-                  set_where(gen, mts_dfac, R(mts_dfac * m_q * temp / fabs(q_s)));
-                  set_where(gen, pq_fac, R(copysign(temp, q_s)));
+                  set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_s));
+                  set_where(gen, pq_fac, copysign(temp, q_s));
                }
             }
             if (any(qsmall)) {
-               set_where(qsmall, mts_dfac, R(zero));
-               set_where(qsmall, pq_fac, R(zero));
+               set_where(qsmall, mts_dfac, zero);
+               set_where(qsmall, pq_fac, zero);
             }
 
             exp_arg = -c_e * pq_fac;
          }
 
          /**
-          * @brief Slip rate of one slip system: MTS-like thermally activated
-          * kinetics balanced with drag (value type R: one point or a pack,
-          * see ECMech_value_type.h; each early return of the scalar law is a
-          * "done" mask).
+          * @brief Evaluate the balanced thermally-activated + power-law-tail slip rate,
+          * combined by harmonic mean with the drag-limited rate, for a single slip
+          * system -- see the "Slip-rate law" equations and symbol table in the
+          * file-level documentation in ECMech_kinetics_OrowanD.h (`gam_w`/`gam_r` here
+          * are γ̇_w/γ̇_r, computed by getVals from this slip system's own mobile
+          * density).
+          * @param[out] gdot Slip rate γ̇ [1/time].
+          * @param[out] l_act `true` if the slip system is active.
+          * @param[out] dgdot_dtau Derivative of `gdot` w.r.t. resolved shear stress.
+          * @param[in] vals Kinetic values from getVals.
+          * @param iSlip Slip system index (selects which parameter group to use when
+          * `perSS`).
+          * @param tau Resolved shear stress τ [stress units].
+          * @param mu Shear modulus, used to form the thermal energy prefactor c_e.
+          * Value type R: one point (double) or a pack of points (see
+          * ECMech_value_type.h); each early return of the scalar law is a
+          * per-point "done" mask, and for double these are the original returns.
           */
          template<class R>
          __ecmech_hdev__
@@ -974,13 +987,13 @@ namespace ecmech {
                const auto lin = (exp_arg < idp_eps_sqrt);
                if (any(lin)) {
                   // linear expansion is cheaper and more accurate
-                  set_where(lin, gdot_r, R(gam_r * exp_arg));
-                  set_where(lin, temp, R(one - exp_arg));
+                  set_where(lin, gdot_r, gam_r * exp_arg);
+                  set_where(lin, temp, one - exp_arg);
                }
                if (any(!lin)) {
                   const R e = exp(-exp_arg);
                   set_where(!lin, temp, e);
-                  set_where(!lin, gdot_r, R(gam_r * (one - e)));
+                  set_where(!lin, gdot_r, gam_r * (one - e));
                }
                dgdot_r_dtau = gam_r * temp / m_wrD;
             }
@@ -988,7 +1001,7 @@ namespace ecmech {
                const auto drag = !done && (at_0 > t_max);
                if (any(drag)) {
                   // have overflow of thermally activated kinetics, purely drag limited
-                  set_where(drag, gdot, R(copysign(gdot_r, tau)));
+                  set_where(drag, gdot, copysign(gdot_r, tau));
                   set_where(drag, dgdot_dtau, dgdot_r_dtau);
                   l_act = l_act || drag;
                   done = done || drag;
@@ -1023,9 +1036,9 @@ namespace ecmech {
                if (any(back)) {
                   // non-vanishing contribution from balancing MTS-like kinetics
                   const R gdot_w_m = gam_w * exp(exp_arg_m);
-                  set_where(back, gdot_w, R(gdot_w - gdot_w_m));
+                  set_where(back, gdot_w, gdot_w - gdot_w_m);
                   const R contrib = mts_dfac_m * gdot_w_m;
-                  set_where(back, dgdot_w_dtau, R(dgdot_w_dtau - contrib));
+                  set_where(back, dgdot_w_dtau, dgdot_w_dtau - contrib);
                   done = done || (back && (fabs(gdot_w / gam_w) < gam_ratio_min));
                   if (all(done)) {
                      // effectively zero from roundoff
@@ -1042,10 +1055,10 @@ namespace ecmech {
                const R temp = (gam_w * gdot_w_pl_scaling) * exp(blog);
 
                const R gdot_w_pl = temp * at_0; // not signed
-               set_where(pl, gdot_w, R(gdot_w + gdot_w_pl));
+               set_where(pl, gdot_w, gdot_w + gdot_w_pl);
 
                const R contrib = temp * xnn * g_i;
-               set_where(pl, dgdot_w_dtau, R(dgdot_w_dtau + contrib));
+               set_where(pl, dgdot_w_dtau, dgdot_w_dtau + contrib);
             }
 
             const auto fin = !done;
@@ -1054,189 +1067,12 @@ namespace ecmech {
                const R g = one / (one / gdot_w + one / gdot_r);
                const R gdrdiv2 = one / (gdot_r * gdot_r);
                const R gdwdiv2 = one / (gdot_w * gdot_w);
-               set_where(fin, dgdot_dtau, R((g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2)));
-               set_where(fin, gdot, R(copysign(g, tau)));
+               set_where(fin, dgdot_dtau, (g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
+               set_where(fin, gdot, copysign(g, tau));
             }
          } // evalGdot
 
 
-         /**
-          * @brief Evaluate the balanced thermally-activated + power-law-tail slip rate,
-          * combined by harmonic mean with the drag-limited rate, for a single slip
-          * system -- see the "Slip-rate law" equations and symbol table in the
-          * file-level documentation in ECMech_kinetics_OrowanD.h (`gam_w`/`gam_r` here
-          * are γ̇_w/γ̇_r, computed by getVals from this slip system's own mobile
-          * density).
-          * @param[out] gdot Slip rate γ̇ [1/time].
-          * @param[out] l_act `true` if the slip system is active.
-          * @param[out] dgdot_dtau Derivative of `gdot` w.r.t. resolved shear stress.
-          * @param[in] vals Kinetic values from getVals.
-          * @param iSlip Slip system index (selects which parameter group to use when
-          * `perSS`).
-          * @param tau Resolved shear stress τ [stress units].
-          * @param mu Shear modulus, used to form the thermal energy prefactor c_e.
-          */
-         __ecmech_hdev__
-         inline
-         void
-         evalGdot(
-            double & gdot,
-            bool   & l_act,
-            double & dgdot_dtau, // wrt resolved shear stress
-            const double* const vals,
-            int      iSlip,
-            double   tau,
-            double   mu
-            ) const
-         {
-            static const double gdot_w_pl_scaling = 10.0;
-            static const double one = 1.0, zero = 0.0;
-
-            const double gIn = vals[1 + iSlip];
-            const double qm = vals[1 + nslip + iSlip];
-            const double xn = perSS ? m_xn[iSlip] : m_xn[0];
-            const double xnn = perSS ? m_xnn[iSlip] : m_xnn[0];
-            const double t_min = perSS ? m_t_min[iSlip] : m_t_min[0];
-            const double t_max = perSS ? m_t_max[iSlip] : m_t_max[0];
-            const double c_t = perSS ? vals[1 + 2 * nslip + iSlip] : vals[1 + 2 * nslip];
-            const double gam_w = m_lbar_b * m_fD / sqrt(qm);
-            const double gam_r = m_gam_ro * qm;
-
-            // zero things so that can more easily just return if inactive
-            gdot = zero;
-            //
-            dgdot_dtau = zero;
-            l_act = false;
-
-            double g_i;
-            double gAth;
-            if (withGAthermal) {
-               gAth = gIn;
-               g_i = one / m_tau_a;
-            }
-            else {
-               gAth = m_tau_a;
-               if (tau == zero) {
-                  return;
-               }
-               g_i = one / gIn;
-            }
-            double at_0 = fmax(zero, fabs(tau) - gAth) * g_i;
-            // calculate drag limited kinetics
-            //
-            double gdot_r, dgdot_r_dtau;
-            {
-               double exp_arg = (fabs(tau) - gAth) / m_wrD;
-               double temp;
-               if (exp_arg < gam_ratio_min) { // ! IF (gdot_r < gam_ratio_min) THEN
-                  // note that this should catch tau <= g
-                  return;
-               }
-               else if (exp_arg < idp_eps_sqrt) {
-                  // linear expansion is cheaper and more accurate
-                  gdot_r = gam_r * exp_arg;
-                  temp = one - exp_arg; // still use temp below as approximation to exp(-fabs(tau)/m_wrD)
-               }
-               else {
-                  temp = exp(-exp_arg);
-                  gdot_r = gam_r * (one - temp);
-               }
-               dgdot_r_dtau = gam_r * temp / m_wrD;
-            }
-            //
-            if (at_0 > t_max) {
-               // have overflow of thermally activated kinetics, purely drag limited
-
-               gdot = gdot_r;
-
-               dgdot_dtau = dgdot_r_dtau;
-               gdot = copysign(gdot, tau);
-
-               l_act = true;
-               return;
-            }
-
-            double gdot_w, dgdot_w_dtau;
-            double dgdot_w_dg; // only used if !withGAthermal
-            //
-            // calculate thermally activated kinetics
-            {
-               double c_e = c_t * mu;
-               //
-               const double t_frac = (fabs(tau) - gAth) * g_i;
-               double exp_arg, mts_dfac;
-               get_mts_dG(exp_arg, mts_dfac, c_e, g_i, t_frac);
-               //
-               if (exp_arg < ln_gam_ratio_min) {
-                  // effectively zero due to thermally activated kinetics
-                  l_act = false;
-                  return;
-               }
-               //
-               //
-               // !IF (exp_arg > ln_gam_ratio_ovf) THEN
-               // !END IF
-               // ! do not need to check the above condition because have pegged the MTS part of the kinetics
-               //
-               gdot_w = gam_w * exp(exp_arg);
-               dgdot_w_dtau = mts_dfac * gdot_w;
-               if (!withGAthermal) {
-                  dgdot_w_dg = dgdot_w_dtau * t_frac;
-               }
-               //
-               double t_frac_m = (-fabs(tau) - gAth) * g_i;
-               double exp_arg_m, mts_dfac_m;
-               get_mts_dG(exp_arg_m, mts_dfac_m, c_e, g_i, t_frac_m);
-               //
-               if (exp_arg_m > ln_gam_ratio_min) {
-                  // non-vanishing contribution from balancing MTS-like kinetics
-                  double gdot_w_m = gam_w * exp(exp_arg_m);
-                  gdot_w = gdot_w - gdot_w_m;
-                  double contrib = mts_dfac_m * gdot_w_m;
-                  dgdot_w_dtau = dgdot_w_dtau - contrib; // sign used to be the other way, but suspect that was a bug
-                  if (!withGAthermal) {
-                     dgdot_w_dg = dgdot_w_dg - contrib * t_frac_m;
-                  }
-                  if (fabs(gdot_w / gam_w) < gam_ratio_min) {
-                     // effectively zero from roundoff
-                     l_act = false;
-                     return;
-                  }
-               }
-            }
-
-            if (at_0 > t_min) {
-               // need power-law part
-
-               double abslog = log(at_0);
-               double blog = xn * abslog;
-               double temp = (gam_w * gdot_w_pl_scaling) * exp(blog);
-
-               double gdot_w_pl = temp * at_0; // not signed ! copysign(at_0,tau)
-               gdot_w = gdot_w + gdot_w_pl;
-
-               double contrib = temp * xnn * g_i;
-               dgdot_w_dtau = dgdot_w_dtau + contrib;
-               if (!withGAthermal) {
-                  dgdot_w_dg = dgdot_w_dg + contrib * at_0;
-               }
-            }
-
-            l_act = true;
-            //
-            {
-               // gdot = gdot_r;
-               gdot = one / (one / gdot_w + one / gdot_r);
-               const double gdrdiv2 = one / (gdot_r * gdot_r);
-               const double gdwdiv2 = one / (gdot_w * gdot_w);
-
-               // dgdot_dtau = dgdot_r_dtau;
-               dgdot_dtau = (gdot * gdot) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2);
-               //
-            }
-
-            gdot = copysign(gdot, tau);
-         } // evalGdot
 
          /**
           * @brief Advance the per-slip-system mobile and total dislocation densities
