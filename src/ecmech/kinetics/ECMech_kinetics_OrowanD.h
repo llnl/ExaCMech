@@ -206,28 +206,54 @@
 
 #include "RAJA/RAJA.hpp"
 #include "SNLS_TrDLDenseG.h"
+#include "SNLS_NewtonBB.h"
 
 namespace ecmech {
    /**
-    * @brief Mobile/total dislocation-density (Orowan) hardening law with balanced,
-    * thermally-activated MTS-like slip kinetics and phonon drag.
-    *
-    * See the file-level documentation in ECMech_kinetics_OrowanD.h for the governing
-    * equations and template-parameter meanings.
-    *
-    * @tparam withGAthermal Selects which of the per-slip-system CRSS or the reference
-    * stress `m_tau_a` is the athermal floor vs. the MTS-normalizing stress.
-    * @tparam pOne When `true`, the MTS exponent p is fixed at 1.
-    * @tparam qOne When `true`, the MTS exponent q is fixed at 1.
-    * @tparam isotropic When `true`, the forest-interaction matrix collapses to a single
-    * scalar shared by every slip-system pair.
-    * @tparam perSS When `true`, the per-group parameters vary per slip system.
-    * @tparam nVPer Number of parameter groups (1 if `!perSS`, else the slip system count).
-    * @tparam SlipGeom Slip geometry class.
-    * @tparam LOGFORM When `true`, solve the hardening update in log space.
-    *
-    * @ingroup ECMech_kinetics
+    * Mobile log-density update of one slip system for the reduced Orowan
+    * hardening solve: g(y) = y - y_o - a (alpha_sf - beta e^y) = 0, with
+    * a = dt nu, alpha_sf = alpha sqrt(f). g' = 1 + a beta e^y > 0, so the
+    * root is unique, and it lies in [yh - a beta e^yh, yh] with
+    * yh = y_o + a alpha_sf: g(yh) = a beta e^yh >= 0 and, since e^y <= e^yh
+    * there, g(yh - a beta e^yh) <= 0. Solved with SNLS's bracketed Newton
+    * (NewtonBB), which falls back to bisection inside that bracket.
     */
+   template<class R>
+   struct OrowanMobileFJ {
+      R y_o, a, alpha_sf;
+      double beta;
+      __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y) { return computeFJ(f, J, y, all_lanes<R>()); }
+      /// active: the lanes NewtonBB needs a value for (exp only for those)
+      __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y, const mask_t<R>& active) {
+         const R e = exp_where(active, y);
+         f = y - y_o - a * (alpha_sf - beta * e);
+         J = 1.0 + a * beta * e;
+         return all_lanes<R>();
+      }
+   };
+
+   /// value type R: one slip system of one point (double) or of a pack of points
+   template<class R>
+   __ecmech_hdev__
+   inline
+   R solveOrowanMobile(const R& y_o, const R& a, const R& alpha_sf, double beta)
+   {
+      OrowanMobileFJ<R> fj{y_o, a, alpha_sf, beta};
+      const R yh = y_o + a * alpha_sf;
+      const R ab_eh = a * beta * exp(yh);
+      const R yl = yh - ab_eh;
+      snls::NewtonBB<OrowanMobileFJ<R>, R> solver(fj, false);
+      // one absolute tolerance on g for every point (y is a log density of
+      // order 10-30; its rounding error is a few 1e-15), so a pack of points
+      // gives each point the one-point result
+      solver.setupSolver(100, 1e-14);
+      R y = fmin(fmax(y_o, yl), yh);   // initial guess: the old value, inside the bracket
+      // g(yh) = a beta e^yh >= 0 and g(yl) <= 0 are known: pass them (the
+      // lower one only by its sign) instead of evaluating g at the ends
+      solver.solve(y, yl, yh, R(-1e300), ab_eh);
+      return y;
+   }
+
    /**
     * SNLS problem for the reduced Orowan hardening update: unknowns are the
     * (scaled increments of the) log total dislocation densities; the mobile
@@ -330,6 +356,26 @@ namespace ecmech {
       }
    }
 
+   /**
+    * @brief Mobile/total dislocation-density (Orowan) hardening law with balanced,
+    * thermally-activated MTS-like slip kinetics and phonon drag.
+    *
+    * See the file-level documentation in ECMech_kinetics_OrowanD.h for the governing
+    * equations and template-parameter meanings.
+    *
+    * @tparam withGAthermal Selects which of the per-slip-system CRSS or the reference
+    * stress `m_tau_a` is the athermal floor vs. the MTS-normalizing stress.
+    * @tparam pOne When `true`, the MTS exponent p is fixed at 1.
+    * @tparam qOne When `true`, the MTS exponent q is fixed at 1.
+    * @tparam isotropic When `true`, the forest-interaction matrix collapses to a single
+    * scalar shared by every slip-system pair.
+    * @tparam perSS When `true`, the per-group parameters vary per slip system.
+    * @tparam nVPer Number of parameter groups (1 if `!perSS`, else the slip system count).
+    * @tparam SlipGeom Slip geometry class.
+    * @tparam LOGFORM When `true`, solve the hardening update in log space.
+    *
+    * @ingroup ECMech_kinetics
+    */
    template<bool withGAthermal,
             bool pOne, // l_p_1
             bool qOne, // l_q_1
@@ -1318,18 +1364,9 @@ namespace ecmech {
             for (int i = 0; i < n; i++) {
                const R sf = sqrt(forest[i]);
                const R a_i = dt * nu[i];
-               // mobile log-density from its (scalar, monotone) update equation
-               R y = y_m_o[i];
-               mask_t<R> active = all_lanes<R>();
-               for (int k = 0; k < 50; k++) {
-                  const R e = exp(y);
-                  const R g = y - y_m_o[i] - a_i * (alpha * sf - beta * e);
-                  const R dy = g / (one + a_i * beta * e);
-                  const R ynew = y - dy;
-                  set_where(active, y, ynew);
-                  active = active && !(fabs(dy) <= 1e-15 * (one + fabs(ynew)));
-                  if (!any(active)) { break; }
-               }
+               // mobile log-density from its (scalar, monotone) update equation,
+               // by SNLS's bracketed Newton
+               const R y = solveOrowanMobile<R>(y_m_o[i], a_i, R(alpha * sf), beta);
                y_m[i] = y;
                const R Hm = exp(y);
                S[i] = a_i * Hm * (m_c_mult * sf - beta * Hm) / Ht[i];
