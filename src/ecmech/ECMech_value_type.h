@@ -33,6 +33,9 @@ namespace ecmech {
 // The pack type, its traits and its vector math; host code of CPU builds
 // with ECMECH_SIMD_EXPT only. Included here so that the math overloads are
 // declared before any templated code that calls exp/log/pow/sin/cos.
-#if defined(ECMECH_SIMD_EXPT) && !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+// The in-house pack (ECMECH_SIMD_INHOUSE) is declared in both nvcc/hipcc
+// passes (host functions are parsed in the device pass too); it is only used
+// by host code.
+#if defined(ECMECH_SIMD_EXPT) && (defined(ECMECH_SIMD_INHOUSE) || (!defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)))
 #include "simd/ECMech_simd_pack.h"
 #endif

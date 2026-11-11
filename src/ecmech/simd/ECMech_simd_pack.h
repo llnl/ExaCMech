@@ -6,6 +6,19 @@
  * plugged into the value-type layer (SNLS_value_type.h), and vector math.
  */
 
+#if defined(ECMECH_SIMD_INHOUSE)
+// S4 review prototype: SNLS's in-house pack type (GNU vector extensions,
+// libmvec math) instead of libstdc++'s std::experimental::simd
+#include "SNLS_pack.h"
+namespace ecmech {
+namespace simd {
+constexpr int W = (ECMECH_SIMD_INHOUSE > 1) ? ECMECH_SIMD_INHOUSE : snls::simd::pack_native_lanes();
+using vdouble = snls::simd::pack<W>;
+using vmask = snls::simd::pack_mask<W>;
+} // namespace simd
+// (the math functions for packs are found by argument-dependent lookup)
+} // namespace ecmech
+#else
 #include <experimental/simd>
 #include <cmath>
 #include <immintrin.h>
@@ -81,3 +94,4 @@ inline vdouble pow(const vdouble& x, const vdouble& y) { return vdouble(_ZGVdN4v
 inline vdouble pow(const vdouble& x, double y) { return pow(x, vdouble(y)); }
 #endif
 } // namespace ecmech
+#endif // ECMECH_SIMD_INHOUSE

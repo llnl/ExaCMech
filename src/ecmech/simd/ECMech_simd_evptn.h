@@ -21,7 +21,7 @@
 #include <cstdlib>
 #include <type_traits>
 #include <vector>
-#if defined(ECMECH_SIMD_EXPT) && !defined(__CUDA_ARCH__)
+#if defined(ECMECH_SIMD_EXPT) && (defined(ECMECH_SIMD_INHOUSE) || !defined(__CUDA_ARCH__))
 #include "simd/ECMech_simd_pack.h"
 #endif
 #include "simd/ECMech_dpack.h"
