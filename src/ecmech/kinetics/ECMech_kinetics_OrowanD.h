@@ -218,40 +218,107 @@ namespace ecmech {
     * there, g(yh - a beta e^yh) <= 0. Solved with SNLS's bracketed Newton
     * (NewtonBB), which falls back to bisection inside that bracket.
     */
+   /// The NewtonBB iteration for the mobile densities. g is smooth, increasing
+   /// and convex, so the Newton step is taken whenever it stays inside the
+   /// bracket (NewtonBBStep::newtonFirst): the same results as the classic
+   /// safeguarded iteration here, with less work per iteration in lockstep.
+   /// -DECMECH_ORO_SAFEGUARDED_NEWTONBB selects the classic iteration (testing).
+#ifdef ECMECH_ORO_SAFEGUARDED_NEWTONBB
+   constexpr snls::NewtonBBStep oroMobileStep = snls::NewtonBBStep::safeguarded;
+#else
+   constexpr snls::NewtonBBStep oroMobileStep = snls::NewtonBBStep::newtonFirst;
+#endif
+
    template<class R>
    struct OrowanMobileFJ {
       R y_o, a, alpha_sf;
       double beta;
+      /// the last point evaluated and its exp, per lane (see mobileExp)
+      R y_ev = R(-1e300), e_ev = R(0.0);
       __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y) { return computeFJ(f, J, y, all_lanes<R>()); }
       /// active: the lanes NewtonBB needs a value for (exp only for those)
       __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y, const mask_t<R>& active) {
          const R e = exp_where(active, y);
          f = y - y_o - a * (alpha_sf - beta * e);
          J = 1.0 + a * beta * e;
+         set_where(active, y_ev, y);
+         set_where(active, e_ev, e);
          return all_lanes<R>();
       }
    };
 
-   /// value type R: one slip system of one point (double) or of a pack of points
+   /// exp(y) at the solution. NewtonBB stops on the residual, so for a lane
+   /// that converged there its last evaluation was at y: that exp is reused
+   /// (the same value), and computed only for the other lanes.
+   template<class R>
+   __ecmech_hdev__ SNLS_VT_INLINE R mobileExp(const OrowanMobileFJ<R>& fj, const R& y)
+   {
+      if constexpr (snls::is_scalar_value<R>()) {
+         return (y == fj.y_ev) ? fj.e_ev : exp(y);
+      }
+      else {
+         const mask_t<R> have = (y == fj.y_ev);
+         if (all(have)) { return fj.e_ev; }
+         return select(have, fj.e_ev, exp_where(!have, y));
+      }
+   }
+
+   /// the mobile log-density y and Hm = exp(y)
+   template<class R>
+   struct MobileSol { R y, Hm; };
+
+   /// value type R: one slip system of one point (double) or of a pack of
+   /// points; y_g is the initial guess (moved into the bracket).
+   ///
+   /// Returns y and Hm by value: on the GPU, returning Hm through a reference
+   /// to the caller's local from a device (noinline) call gave wrong results
+   /// in the non-Schmid Orowan kernel (CUDA 12.9, sm_61; bcc_e), while the
+   /// same code was right on the CPU and in the other kernels.
+   ///
+   /// Force-inlined on the host: with the newtonFirst iteration gcc otherwise
+   /// keeps it out of line, which cost the pack path ~4%.
    template<class R>
    __ecmech_hdev__
-   inline
-   R solveOrowanMobile(const R& y_o, const R& a, const R& alpha_sf, double beta)
+#if (defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)) && defined(ECMECH_ORO_DEVICE_NOINLINE)
+   // test option: a device call. Inlined (the default) the Orowan kernels,
+   // which are at the register limit, spill about 2.6-4.4 KB per thread
+   // (sm_61) that the call avoids; on a GTX 1070 the call was 0-2% faster.
+   __noinline__
+#else
+   SNLS_VT_INLINE
+#endif
+   MobileSol<R> solveOrowanMobile(const R& y_o, const R& a, const R& alpha_sf, double beta, const R& y_g)
    {
-      OrowanMobileFJ<R> fj{y_o, a, alpha_sf, beta};
-      const R yh = y_o + a * alpha_sf;
-      const R ab_eh = a * beta * exp(yh);
-      const R yl = yh - ab_eh;
-      snls::NewtonBB<OrowanMobileFJ<R>, R> solver(fj, false);
-      // one absolute tolerance on g for every point (y is a log density of
-      // order 10-30; its rounding error is a few 1e-15), so a pack of points
-      // gives each point the one-point result
-      solver.setupSolver(100, 1e-14);
-      R y = fmin(fmax(y_o, yl), yh);   // initial guess: the old value, inside the bracket
-      // g(yh) = a beta e^yh >= 0 and g(yl) <= 0 are known: pass them (the
-      // lower one only by its sign) instead of evaluating g at the ends
-      solver.solve(y, yl, yh, R(-1e300), ab_eh);
-      return y;
+#ifdef ECMECH_ORO_LANE_NEWTONBB
+      if constexpr (!snls::is_scalar_value<R>()) {
+         // test option: a pack calls the one-point solve once per lane
+         // (measured no faster than the pack solve below on AVX2)
+         MobileSol<R> sol;
+         for (int l = 0; l < snls::lanes_of<R>(); ++l) {
+            const MobileSol<double> s1 = solveOrowanMobile<double>(lane(y_o, l), lane(a, l), lane(alpha_sf, l), beta, lane(y_g, l));
+            set_lane(sol.y, l, s1.y);
+            set_lane(sol.Hm, l, s1.Hm);
+         }
+         return sol;
+      }
+      else
+#endif
+      {
+         OrowanMobileFJ<R> fj{y_o, a, alpha_sf, beta};
+         const R yh = y_o + a * alpha_sf;
+         const R ab_eh = a * beta * exp(yh);
+         const R yl = yh - ab_eh;
+         snls::NewtonBB<OrowanMobileFJ<R>, R, oroMobileStep> solver(fj, false);
+         // one absolute tolerance on g for every point (y is a log density of
+         // order 10-30; its rounding error is a few 1e-15), so a pack of points
+         // gives each point the one-point result
+         solver.setupSolver(100, 1e-14);
+         R y = fmin(fmax(y_g, yl), yh);   // initial guess, inside the bracket
+         // g(yh) = a beta e^yh >= 0 and g(yl) <= 0 are known: pass them (the
+         // lower one only by its sign) instead of evaluating g at the ends
+         solver.solve(y, yl, yh, R(-1e300), ab_eh);
+         return MobileSol<R>{y, mobileExp(fj, y)};
+      }
    }
 
    /**
@@ -275,6 +342,7 @@ namespace ecmech {
             m_kinetics(kinetics), m_y_m_o(y_m_o), m_y_t_o(y_t_o), m_nu(nu), m_dt(dt)
          {
             for (int i = 0; i < nDimSys; i++) {
+               m_y_m_g[i] = m_y_m_o[i];
                m_x_scale[i] = fmax(m_y_t_o[i], R(1.0));
                m_res_scale[i] = 1.0 / m_x_scale[i];
             }
@@ -286,7 +354,7 @@ namespace ecmech {
          void getHn(R* const h, const R* const x) const {
             R y_t[nDimSys], S[nDimSys];
             for (int i = 0; i < nDimSys; i++) { y_t[i] = m_y_t_o[i] + x[i] * m_x_scale[i]; }
-            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, &h[0], S, static_cast<R*>(nullptr));
+            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, &h[0], S, static_cast<R*>(nullptr), m_y_m_g);
             for (int i = 0; i < nDimSys; i++) { h[nDimSys + i] = y_t[i]; }
          }
 
@@ -297,17 +365,12 @@ namespace ecmech {
                         const R* const x) {
             R y_t[nDimSys], y_m[nDimSys], S[nDimSys];
             for (int i = 0; i < nDimSys; i++) { y_t[i] = m_y_t_o[i] + x[i] * m_x_scale[i]; }
-            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, y_m, S, Jacobian);
+            // each inner solve starts from the mobile densities of the previous
+            // evaluation (the previous outer iteration): fewer inner iterations
+            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, y_m, S, Jacobian, m_y_m_g, m_res_scale, m_x_scale);
+            for (int i = 0; i < nDimSys; i++) { m_y_m_g[i] = y_m[i]; }
             for (int i = 0; i < nDimSys; i++) {
                resid[i] = (x[i] * m_x_scale[i] - S[i]) * m_res_scale[i];
-            }
-            if (Jacobian) {
-               for (int i = 0; i < nDimSys; i++) {
-                  for (int j = 0; j < nDimSys; j++) {
-                     Jacobian[i * nDimSys + j] *= -m_res_scale[i] * m_x_scale[j];
-                  }
-                  Jacobian[i * nDimSys + i] += 1.0;
-               }
             }
             return true;
          }
@@ -319,6 +382,7 @@ namespace ecmech {
          const R* const m_nu;
          const double m_dt;
          R m_x_scale[nDimSys], m_res_scale[nDimSys];
+         R m_y_m_g[nDimSys];   // initial guess of the mobile log-densities
    };
 
    /// Reduced-form counterpart of updateHN for KineticsOrowanD (log form).
@@ -1352,7 +1416,10 @@ namespace ecmech {
                           const double dt,
                           R* const y_m,
                           R* const S,
-                          R* const dS) const
+                          R* const dS,
+                          const R* const y_m_g = nullptr,
+                          const R* const rs = nullptr,
+                          const R* const xs = nullptr) const
          {
             constexpr int n = SlipGeom::nslip;
             R Ht[n];
@@ -1366,17 +1433,26 @@ namespace ecmech {
                const R a_i = dt * nu[i];
                // mobile log-density from its (scalar, monotone) update equation,
                // by SNLS's bracketed Newton
-               const R y = solveOrowanMobile<R>(y_m_o[i], a_i, R(alpha * sf), beta);
+               // initial guess: y_m_g (e.g. the last outer iteration's values), else the old value
+               const MobileSol<R> sol = solveOrowanMobile<R>(y_m_o[i], a_i, R(alpha * sf), beta, y_m_g ? y_m_g[i] : y_m_o[i]);
+               const R y = sol.y;
+               const R Hm = sol.Hm;
                y_m[i] = y;
-               const R Hm = exp(y);
                S[i] = a_i * Hm * (m_c_mult * sf - beta * Hm) / Ht[i];
                if (dS) {
                   const R gp = one + a_i * beta * Hm;
                   for (int j = 0; j < n; j++) {
                      const R dsf = m_a_mat[i * n + j] * Ht[j] / (2.0 * sf);   // d sqrt(f_i) / d y_t,j
                      const R dym = a_i * alpha * dsf / gp;                    // d y_m,i / d y_t,j
-                     dS[i * n + j] = a_i / Ht[i] * ((m_c_mult * sf - 2.0 * beta * Hm) * Hm * dym + m_c_mult * Hm * dsf)
-                                     - ((i == j) ? S[i] : R(0.0));
+                     R v = a_i / Ht[i] * ((m_c_mult * sf - 2.0 * beta * Hm) * Hm * dym + m_c_mult * Hm * dsf)
+                           - ((i == j) ? S[i] : R(0.0));
+                     if (rs) {
+                        // the caller's scaled Jacobian, -rs_i xs_j dS_ij + delta_ij, written once
+                        // (a second pass over it cost the GPU kernels ~1.3 KB of stack)
+                        v *= -rs[i] * xs[j];
+                        if (i == j) { v += 1.0; }
+                     }
+                     dS[i * n + j] = v;
                   }
                }
             }
