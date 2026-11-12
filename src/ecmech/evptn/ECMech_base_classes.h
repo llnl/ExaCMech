@@ -455,6 +455,7 @@ namespace evptn {
      * 
      * @see EvptnUpdstProblem for coupled elastic strain + rotation problem
      * @see ThermoElastN classes for specific anisotropic elasticity models
+     * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
      */
     template<class ThermoElastN, class R = double>
     class EvptnLatticeStrainProblem
@@ -1004,6 +1005,7 @@ namespace evptn {
      * 
      * @see EvptnUpdstProblem for coupled elastic strain + rotation integration
      * @see exponential map functions in ECMech_util.h (emap_to_quat, etc.)
+     * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
      */
     template <size_t ind_sub_r=ecmech::ntvec, class R = double>
     class EvptnLatticeRotationProblem {

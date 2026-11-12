@@ -34,7 +34,7 @@ TEST(ecmech, hard_orowan_fcc)
 {
    using namespace ecmech;
    // Baselines from the reduced (total-density) form of the Orowan update
-   // (KineticsOrowanD::reducedHardening). They differ from the earlier
+   // (KineticsOrowanD::reduced_hardening). They differ from the earlier
    // coupled-solve baselines (1.000688247427146e+4 / 4.001148109947428e+4,
    // and 1.992139383887259e-2 / 5.896582642644239e-2 with 4 evaluations)
    // by at most 4.4e-11 relative, within the hardening solver's tolerance;

@@ -210,13 +210,44 @@
 
 namespace ecmech {
    /**
-    * Mobile log-density update of one slip system for the reduced Orowan
-    * hardening solve: g(y) = y - y_o - a (alpha_sf - beta e^y) = 0, with
-    * a = dt nu, alpha_sf = alpha sqrt(f). g' = 1 + a beta e^y > 0, so the
-    * root is unique, and it lies in [yh - a beta e^yh, yh] with
-    * yh = y_o + a alpha_sf: g(yh) = a beta e^yh >= 0 and, since e^y <= e^yh
-    * there, g(yh - a beta e^yh) <= 0. Solved with SNLS's bracketed Newton
-    * (NewtonBB), which falls back to bisection inside that bracket.
+    * Reduced log-form Orowan hardening update: the single-point (per slip
+    * system) mobile dislocation density solve.
+    *
+    * Symbols as in the file-level "Hardening law" documentation (code names in
+    * brackets; getSdotN keeps the state as h[i] = qM_i, h[nslip + i] = qT_i):
+    *   qM_i, qT_i  mobile and total dislocation density of slip system i
+    *   f_i         forest density, f_i = sum_j A_mat_ij qT_j   [forest_dis, m_a_mat]
+    *   v_i         glide velocity, v_i = |gdot_i| / (qM_i^o b_i), from the start of
+    *               the step and fixed over it                [nu = evolVals]
+    *   c_mult, c_trap, c_ann, d_ann                         [m_c_mult, m_c_trap, m_c_ann, m_d_ann]
+    *   yM_i = ln qM_i, yT_i = ln qT_i  the LOGFORM unknowns; ^o marks the start
+    *               of the step                               [y_m, y_t; y_m_o, y_t_o]
+    *   Δt          time step                                 [dt]
+    *
+    * The mobile rate law, dqM_i/dt = (c_mult - c_trap) √f_i qM_i v_i - c_ann d_ann qM_i^2 v_i,
+    * divided by qM_i for the log form:
+    *   dyM_i/dt = v_i ((c_mult - c_trap) √f_i - c_ann d_ann qM_i)
+    * Backward Euler over Δt, with qM_i = e^(yM_i), for given total densities:
+    *   g_i(yM_i) = yM_i - yM_i^o - Δt v_i ((c_mult - c_trap) √f_i - c_ann d_ann e^(yM_i)) = 0
+    * This is the mobile row of the full update (OrowanReducedHProblem). Only
+    * the slip system's own yM_i appears in it (f_i depends on the totals only),
+    * so once the totals are given each g_i is one scalar equation. In the code
+    *   dt_nu         = Δt v_i
+    *   q_dmult_dtrap = (c_mult - c_trap) √f_i     (the name getSdotN uses)
+    *   c_ann_d_ann   = c_ann d_ann
+    * so g(yM_i) = yM_i - yM_i^o - dt_nu (q_dmult_dtrap - c_ann_d_ann e^(yM_i)).
+    *
+    * Properties used by the solve (Δt, v_i, c_ann, d_ann >= 0):
+    *   dg_i/dyM_i     = 1 + Δt v_i c_ann d_ann e^(yM_i) >= 1  (g_i increasing: exactly one root)
+    *   d2g_i/dyM_i^2  = Δt v_i c_ann d_ann e^(yM_i) >= 0      (g_i convex)
+    * Bracket: with yM_h = yM_i^o + Δt v_i (c_mult - c_trap) √f_i            [y_m_h],
+    *   g_i(yM_h) = Δt v_i c_ann d_ann e^(yM_h) >= 0                         [g_h], and for yM_i <= yM_h,
+    *   e^(yM_i) <= e^(yM_h), so g_i(yM_i) <= yM_i - yM_h + Δt v_i c_ann d_ann e^(yM_h);
+    *   at yM_l = yM_h - Δt v_i c_ann d_ann e^(yM_h)                         [y_m_l] that gives g_i(yM_l) <= 0.
+    *   The root is in [yM_l, yM_h], for one exp, with the signs of g_i at both
+    *   ends known.
+    * Solved with SNLS's bracketed Newton (NewtonBB), which falls back to
+    * bisection inside the bracket.
     */
    /// The NewtonBB iteration for the mobile densities. g is smooth, increasing
    /// and convex, so the Newton step is taken whenever it stays inside the
@@ -224,56 +255,62 @@ namespace ecmech {
    /// safeguarded iteration here, with less work per iteration in lockstep.
    /// -DECMECH_ORO_SAFEGUARDED_NEWTONBB selects the classic iteration (testing).
 #ifdef ECMECH_ORO_SAFEGUARDED_NEWTONBB
-   constexpr snls::NewtonBBStep oroMobileStep = snls::NewtonBBStep::safeguarded;
+   constexpr snls::NewtonBBStep orowan_mobile_step = snls::NewtonBBStep::safeguarded;
 #else
-   constexpr snls::NewtonBBStep oroMobileStep = snls::NewtonBBStep::newtonFirst;
+   constexpr snls::NewtonBBStep orowan_mobile_step = snls::NewtonBBStep::newtonFirst;
 #endif
 
+   /// g_i and dg_i/dyM_i for NewtonBB (R: one point, double, or a pack of points)
    template<class R>
    struct OrowanMobileFJ {
-      R y_o, a, alpha_sf;
-      double beta;
-      /// the last point evaluated and its exp, per lane (see mobileExp)
-      R y_ev = R(-1e300), e_ev = R(0.0);
-      __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y) { return computeFJ(f, J, y, all_lanes<R>()); }
+      R y_m_o;              ///< yM_i^o, log mobile density at the start of the step
+      R dt_nu;             ///< Δt v_i
+      R q_dmult_dtrap;     ///< (c_mult - c_trap) √f_i
+      double c_ann_d_ann;  ///< c_ann d_ann
+      /// the last y_m evaluated and its q_m = e^(y_m), per lane (see mobile_q_m)
+      R y_m_ev = R(-1e300), q_m_ev = R(0.0);
+      __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y_m) { return computeFJ(f, J, y_m, all_lanes<R>()); }
       /// active: the lanes NewtonBB needs a value for (exp only for those)
-      __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y, const mask_t<R>& active) {
-         const R e = exp_where(active, y);
-         f = y - y_o - a * (alpha_sf - beta * e);
-         J = 1.0 + a * beta * e;
-         set_where(active, y_ev, y);
-         set_where(active, e_ev, e);
+      __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y_m, const mask_t<R>& active) {
+         const R q_m = exp_where(active, y_m);
+         // g_i = yM_i - yM_i^o - Δt v_i ((c_mult - c_trap) √f_i - c_ann d_ann qM_i)
+         f = y_m - y_m_o - dt_nu * (q_dmult_dtrap - c_ann_d_ann * q_m);
+         // dg_i/dyM_i = 1 + Δt v_i c_ann d_ann qM_i
+         J = 1.0 + dt_nu * c_ann_d_ann * q_m;
+         set_where(active, y_m_ev, y_m);
+         set_where(active, q_m_ev, q_m);
          return all_lanes<R>();
       }
    };
 
-   /// exp(y) at the solution. NewtonBB stops on the residual, so for a lane
-   /// that converged there its last evaluation was at y: that exp is reused
+   /// q_m = e^(y_m) at the solution. NewtonBB stops on the residual, so for a
+   /// lane that converged its last evaluation was at y_m: that exp is reused
    /// (the same value), and computed only for the other lanes.
    template<class R>
-   __ecmech_hdev__ SNLS_VT_INLINE R mobileExp(const OrowanMobileFJ<R>& fj, const R& y)
+   __ecmech_hdev__ SNLS_VT_INLINE R mobile_q_m(const OrowanMobileFJ<R>& fj, const R& y_m)
    {
       if constexpr (snls::is_scalar_value<R>()) {
-         return (y == fj.y_ev) ? fj.e_ev : exp(y);
+         return (y_m == fj.y_m_ev) ? fj.q_m_ev : exp(y_m);
       }
       else {
-         const mask_t<R> have = (y == fj.y_ev);
-         if (all(have)) { return fj.e_ev; }
-         return select(have, fj.e_ev, exp_where(!have, y));
+         const mask_t<R> have = (y_m == fj.y_m_ev);
+         if (all(have)) { return fj.q_m_ev; }
+         return select(have, fj.q_m_ev, exp_where(!have, y_m));
       }
    }
 
-   /// the mobile log-density y and Hm = exp(y)
+   /// The solution of g_i = 0: yM_i and qM_i = e^(yM_i)
    template<class R>
-   struct MobileSol { R y, Hm; };
+   struct OrowanMobileSolution { R y_m, q_m; };
 
-   /// value type R: one slip system of one point (double) or of a pack of
-   /// points; y_g is the initial guess (moved into the bracket).
+   /// Solve g_i(y_M,i) = 0 (see above) for one slip system of one point
+   /// (R = double) or of a pack of points. y_m_guess is the initial guess,
+   /// moved into the bracket.
    ///
-   /// Returns y and Hm by value: on the GPU, returning Hm through a reference
-   /// to the caller's local from a device (noinline) call gave wrong results
-   /// in the non-Schmid Orowan kernel (CUDA 12.9, sm_61; bcc_e), while the
-   /// same code was right on the CPU and in the other kernels.
+   /// Returns y_m and q_m by value: on the GPU, returning q_m through a
+   /// reference to the caller's local from a device (noinline) call gave wrong
+   /// results in the non-Schmid Orowan kernel (CUDA 12.9, sm_61; bcc_e), while
+   /// the same code was right on the CPU and in the other kernels.
    ///
    /// Force-inlined on the host: with the newtonFirst iteration gcc otherwise
    /// keeps it out of line, which cost the pack path ~4%.
@@ -287,45 +324,62 @@ namespace ecmech {
 #else
    SNLS_VT_INLINE
 #endif
-   MobileSol<R> solveOrowanMobile(const R& y_o, const R& a, const R& alpha_sf, double beta, const R& y_g)
+   OrowanMobileSolution<R> solve_orowan_mobile(const R& y_m_o, const R& dt_nu, const R& q_dmult_dtrap, double c_ann_d_ann, const R& y_m_guess)
    {
 #ifdef ECMECH_ORO_LANE_NEWTONBB
       if constexpr (!snls::is_scalar_value<R>()) {
          // test option: a pack calls the one-point solve once per lane
          // (measured no faster than the pack solve below on AVX2)
-         MobileSol<R> sol;
+         OrowanMobileSolution<R> sol;
          for (int l = 0; l < snls::lanes_of<R>(); ++l) {
-            const MobileSol<double> s1 = solveOrowanMobile<double>(lane(y_o, l), lane(a, l), lane(alpha_sf, l), beta, lane(y_g, l));
-            set_lane(sol.y, l, s1.y);
-            set_lane(sol.Hm, l, s1.Hm);
+            const OrowanMobileSolution<double> s1 = solve_orowan_mobile<double>(lane(y_m_o, l), lane(dt_nu, l), lane(q_dmult_dtrap, l),
+                                                                   c_ann_d_ann, lane(y_m_guess, l));
+            set_lane(sol.y_m, l, s1.y_m);
+            set_lane(sol.q_m, l, s1.q_m);
          }
          return sol;
       }
       else
 #endif
       {
-         OrowanMobileFJ<R> fj{y_o, a, alpha_sf, beta};
-         const R yh = y_o + a * alpha_sf;
-         const R ab_eh = a * beta * exp(yh);
-         const R yl = yh - ab_eh;
-         snls::NewtonBB<OrowanMobileFJ<R>, R, oroMobileStep> solver(fj, false);
-         // one absolute tolerance on g for every point (y is a log density of
+         OrowanMobileFJ<R> fj{y_m_o, dt_nu, q_dmult_dtrap, c_ann_d_ann};
+         // the bracket [yM_l, yM_h] and g_i(yM_h) = Δt v_i c_ann d_ann e^(yM_h)
+         const R y_m_h = y_m_o + dt_nu * q_dmult_dtrap;
+         const R g_h = dt_nu * c_ann_d_ann * exp(y_m_h);
+         const R y_m_l = y_m_h - g_h;
+         snls::NewtonBB<OrowanMobileFJ<R>, R, orowan_mobile_step> solver(fj, false);
+         // one absolute tolerance on g for every point (y_m is a log density of
          // order 10-30; its rounding error is a few 1e-15), so a pack of points
          // gives each point the one-point result
          solver.setupSolver(100, 1e-14);
-         R y = fmin(fmax(y_g, yl), yh);   // initial guess, inside the bracket
-         // g(yh) = a beta e^yh >= 0 and g(yl) <= 0 are known: pass them (the
-         // lower one only by its sign) instead of evaluating g at the ends
-         solver.solve(y, yl, yh, R(-1e300), ab_eh);
-         return MobileSol<R>{y, mobileExp(fj, y)};
+         R y_m = fmin(fmax(y_m_guess, y_m_l), y_m_h);   // initial guess, inside the bracket
+         // g_i(yM_h) >= 0 is known and g_i(yM_l) <= 0 by sign only: pass them
+         // instead of evaluating g at the ends
+         solver.solve(y_m, y_m_l, y_m_h, R(-1e300), g_h);
+         return OrowanMobileSolution<R>{y_m, mobile_q_m(fj, y_m)};
       }
    }
 
    /**
-    * SNLS problem for the reduced Orowan hardening update: unknowns are the
-    * (scaled increments of the) log total dislocation densities; the mobile
-    * densities are solved inside each evaluation by
-    * Kinetics::reducedHardening. Scaling follows Kinetics_HNProblem.
+    * SNLS problem for the reduced Orowan hardening update (log form).
+    * Symbols as in solve_orowan_mobile and the file-level "Hardening law".
+    *
+    * The full update (updateHN: Kinetics_HNProblem with getSdotN) solves
+    * 2 nslip backward-Euler equations in h = (yM_1..yM_n, yT_1..yT_n):
+    *   rM_i = yM_i - yM_i^o - Δt sdotM_i(yM, yT) = 0
+    *   rT_i = yT_i - yT_i^o - Δt sdotT_i(yM, yT) = 0
+    * with the log-form rates (getSdotN's rates divided by qM_i and qT_i)
+    *   sdotM_i = v_i ((c_mult - c_trap) √f_i - c_ann d_ann qM_i)
+    *   sdotT_i = v_i qM_i (c_mult √f_i - c_ann d_ann qM_i) / qT_i
+    * and f_i = sum_j A_mat_ij qT_j. rM_i depends on yM_i and on the totals only,
+    * so for given yT each rM_i = 0 is the scalar equation g_i (solve_orowan_mobile)
+    * and defines yM_i(y_t). Substituting it leaves nslip equations in y_t alone:
+    *   R_i(yT) = yT_i - yT_i^o - Δt sdotT_i(yM(yT), yT) = 0
+    * which this class solves; Kinetics::reduced_hardening gives Δt sdotT_i and
+    * its derivatives. Unknowns and scaling are those of Kinetics_HNProblem:
+    *   yT_i = yT_i^o + x_i x_scale_i,  x_scale_i = max(yT_i^o, 1)
+    *   resid_i = (x_i x_scale_i - Δt sdotT_i) res_scale_i,  res_scale_i = 1 / x_scale_i
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<class Kinetics, class R = double>
    class OrowanReducedHProblem
@@ -342,19 +396,19 @@ namespace ecmech {
             m_kinetics(kinetics), m_y_m_o(y_m_o), m_y_t_o(y_t_o), m_nu(nu), m_dt(dt)
          {
             for (int i = 0; i < nDimSys; i++) {
-               m_y_m_g[i] = m_y_m_o[i];
+               m_y_m_guess[i] = m_y_m_o[i];
                m_x_scale[i] = fmax(m_y_t_o[i], R(1.0));
                m_res_scale[i] = 1.0 / m_x_scale[i];
             }
          }
 
-         /// Log mobile and total densities (mobile first, as in the full problem)
+         /// h = (yM, yT), mobile first as in the full problem, at the solution x
          __ecmech_hdev__
          inline
          void getHn(R* const h, const R* const x) const {
-            R y_t[nDimSys], S[nDimSys];
+            R y_t[nDimSys], dt_sdot_t[nDimSys];
             for (int i = 0; i < nDimSys; i++) { y_t[i] = m_y_t_o[i] + x[i] * m_x_scale[i]; }
-            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, &h[0], S, static_cast<R*>(nullptr), m_y_m_g);
+            m_kinetics->reduced_hardening(y_t, m_y_m_o, m_nu, m_dt, &h[0], dt_sdot_t, static_cast<R*>(nullptr), m_y_m_guess);
             for (int i = 0; i < nDimSys; i++) { h[nDimSys + i] = y_t[i]; }
          }
 
@@ -363,26 +417,29 @@ namespace ecmech {
          bool computeRJ(R* const resid,
                         R* const Jacobian,
                         const R* const x) {
-            R y_t[nDimSys], y_m[nDimSys], S[nDimSys];
+            R y_t[nDimSys], y_m[nDimSys], dt_sdot_t[nDimSys];
             for (int i = 0; i < nDimSys; i++) { y_t[i] = m_y_t_o[i] + x[i] * m_x_scale[i]; }
-            // each inner solve starts from the mobile densities of the previous
-            // evaluation (the previous outer iteration): fewer inner iterations
-            m_kinetics->reducedHardening(y_t, m_y_m_o, m_nu, m_dt, y_m, S, Jacobian, m_y_m_g, m_res_scale, m_x_scale);
-            for (int i = 0; i < nDimSys; i++) { m_y_m_g[i] = y_m[i]; }
+            // each mobile solve starts from the y_m of the previous evaluation
+            // (the previous outer iteration): fewer inner iterations. The
+            // Jacobian comes back already scaled, as Kinetics_HNProblem's:
+            // dresid_i/dx_j = delta_ij - res_scale_i x_scale_j d(Δt sdotT_i)/dyT_j
+            // (see reduced_hardening).
+            m_kinetics->reduced_hardening(y_t, m_y_m_o, m_nu, m_dt, y_m, dt_sdot_t, Jacobian, m_y_m_guess, m_res_scale, m_x_scale);
+            for (int i = 0; i < nDimSys; i++) { m_y_m_guess[i] = y_m[i]; }
             for (int i = 0; i < nDimSys; i++) {
-               resid[i] = (x[i] * m_x_scale[i] - S[i]) * m_res_scale[i];
+               resid[i] = (x[i] * m_x_scale[i] - dt_sdot_t[i]) * m_res_scale[i];
             }
             return true;
          }
 
       private:
          const Kinetics* m_kinetics;
-         const R* const m_y_m_o;
-         const R* const m_y_t_o;
-         const R* const m_nu;
+         const R* const m_y_m_o;     ///< yM^o
+         const R* const m_y_t_o;     ///< yT^o
+         const R* const m_nu;       ///< v (nu, evolVals)
          const double m_dt;
          R m_x_scale[nDimSys], m_res_scale[nDimSys];
-         R m_y_m_g[nDimSys];   // initial guess of the mobile log-densities
+         R m_y_m_guess[nDimSys];     ///< initial guess of the mobile solves
    };
 
    /// Reduced-form counterpart of updateHN for KineticsOrowanD (log form).
@@ -933,6 +990,7 @@ namespace ecmech {
           * each slip system.
           * @param[in] tau Resolved shear stress on each slip system τ [stress units].
           * @param[in] vals Kinetic values from getVals.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -975,6 +1033,7 @@ namespace ecmech {
           * ECMech_value_type.h).
           * @param active The points that need the result (true for one point);
           * pow() is evaluated only for them.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -997,30 +1056,30 @@ namespace ecmech {
                if (m_p != one) { // the m_p == one case keeps p_func = t_frac
                   const auto gen = active && !tiny;
                   if (any(gen)) {
-                     const R t_s = select(gen, t_frac, R(one));
-                     R pf = pow_where(gen, fabs(t_s), m_p);
-                     pf = copysign(pf, t_s);
-                     set_where(gen, p_func, pf);
-                     set_where(gen, mts_dfac, mts_dfac * m_p * pf / t_s);
+                     const R t_frac_safe = select(gen, t_frac, R(one));
+                     R t_frac_pow_p = pow_where(gen, fabs(t_frac_safe), m_p);
+                     t_frac_pow_p = copysign(t_frac_pow_p, t_frac_safe);
+                     set_where(gen, p_func, t_frac_pow_p);
+                     set_where(gen, mts_dfac, mts_dfac * m_p * t_frac_pow_p / t_frac_safe);
                   }
                }
             }
 
             const R q_arg = one - p_func;
-            const auto qsmall = (q_arg < idp_tiny_sqrt);
+            const auto q_arg_small = (q_arg < idp_tiny_sqrt);
             R pq_fac = q_arg;
             if (!qOne && m_q != one) {
-               const auto gen = active && !qsmall;
+               const auto gen = active && !q_arg_small;
                if (any(gen)) {
-                  const R q_s = select(gen, q_arg, R(one));
-                  const R temp = pow_where(gen, fabs(q_s), m_q);
-                  set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_s));
-                  set_where(gen, pq_fac, copysign(temp, q_s));
+                  const R q_arg_safe = select(gen, q_arg, R(one));
+                  const R temp = pow_where(gen, fabs(q_arg_safe), m_q);
+                  set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_arg_safe));
+                  set_where(gen, pq_fac, copysign(temp, q_arg_safe));
                }
             }
-            if (any(qsmall)) {
-               set_where(qsmall, mts_dfac, zero);
-               set_where(qsmall, pq_fac, zero);
+            if (any(q_arg_small)) {
+               set_where(q_arg_small, mts_dfac, zero);
+               set_where(q_arg_small, pq_fac, zero);
             }
 
             exp_arg = -c_e * pq_fac;
@@ -1044,6 +1103,7 @@ namespace ecmech {
           * Value type R: one point (double) or a pack of points (see
           * ECMech_value_type.h); each early return of the scalar law is a
           * per-point "done" mask, and for double these are the original returns.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -1105,16 +1165,16 @@ namespace ecmech {
                   return;
                }
                R temp;
-               const auto lin = (exp_arg < idp_eps_sqrt);
-               if (any(lin)) {
+               const auto small_exp_arg = (exp_arg < idp_eps_sqrt);
+               if (any(small_exp_arg)) {
                   // linear expansion is cheaper and more accurate
-                  set_where(lin, gdot_r, gam_r * exp_arg);
-                  set_where(lin, temp, one - exp_arg);
+                  set_where(small_exp_arg, gdot_r, gam_r * exp_arg);
+                  set_where(small_exp_arg, temp, one - exp_arg);
                }
-               if (any(!lin)) {
-                  const R e = exp_where(!done && !lin, -exp_arg);
-                  set_where(!lin, temp, e);
-                  set_where(!lin, gdot_r, gam_r * (one - e));
+               if (any(!small_exp_arg)) {
+                  const R e = exp_where(!done && !small_exp_arg, -exp_arg);
+                  set_where(!small_exp_arg, temp, e);
+                  set_where(!small_exp_arg, gdot_r, gam_r * (one - e));
                }
                dgdot_r_dtau = gam_r * temp / m_wrD;
             }
@@ -1182,14 +1242,14 @@ namespace ecmech {
                set_where(pl, dgdot_w_dtau, dgdot_w_dtau + contrib);
             }
 
-            const auto fin = !done;
-            l_act = l_act || fin;
+            const auto not_done = !done;
+            l_act = l_act || not_done;
             {
                const R g = one / (one / gdot_w + one / gdot_r);
                const R gdrdiv2 = one / (gdot_r * gdot_r);
                const R gdwdiv2 = one / (gdot_w * gdot_w);
-               set_where(fin, dgdot_dtau, (g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
-               set_where(fin, gdot, copysign(g, tau));
+               set_where(not_done, dgdot_dtau, (g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
+               set_where(not_done, gdot, copysign(g, tau));
             }
          } // evalGdot
 
@@ -1208,7 +1268,7 @@ namespace ecmech {
           * and the result is exponentiated back. In that case the update is solved in
           * the total densities only (#updateHOrowanReduced, an nslip x nslip SNLS
           * solve; the mobile densities are solved per slip system inside each
-          * evaluation, see #reducedHardening), unless ECMECH_OROWAN_FULL_HSOLVE is
+          * evaluation, see #reduced_hardening), unless ECMECH_OROWAN_FULL_HSOLVE is
           * defined, which keeps the coupled 2*nslip x 2*nslip solve (#updateHN).
           * Otherwise (not `LOGFORM`) the coupled #updateHN solve is used, and the raw
           * (non-log) solve has
@@ -1241,7 +1301,7 @@ namespace ecmech {
          template<class R>
          __ecmech_hdev__
          inline
-         void hardeningInputs(R* const ihs_o, R* const nu, const R* const hs_o, const R* const gdot) const
+         void hardening_inputs(R* const ihs_o, R* const nu, const R* const hs_o, const R* const gdot) const
          {
             for (int i = 0; i < nslip * 2; i++) {
                if (i < nslip) {
@@ -1267,7 +1327,7 @@ namespace ecmech {
             static_assert(LOGFORM, "pack hardening update: reduced log-form solve only");
             R ihs_o[SlipGeom::nslip * 2];
             R nu[SlipGeom::nslip];
-            hardeningInputs(ihs_o, nu, hs_o, gdot);
+            hardening_inputs(ihs_o, nu, hs_o, gdot);
             const mask_t<R> ok = updateHOrowanReduced<KineticsOrowanD, R>(this, &hs_u[0], &ihs_o[0], dt, nu);
             for (int i = 0; i < nslip * 2; i++) {
                hs_u[i] = exp(hs_u[i]);
@@ -1289,12 +1349,12 @@ namespace ecmech {
 
             double ihs_o[SlipGeom::nslip * 2];
             double nu[SlipGeom::nslip];
-            hardeningInputs(ihs_o, nu, hs_o, gdot);
+            hardening_inputs(ihs_o, nu, hs_o, gdot);
 
 #if !defined(ECMECH_OROWAN_FULL_HSOLVE)
             int nFEvals;
             if constexpr (LOGFORM) {
-               // nslip x nslip solve in the total densities (see reducedHardening)
+               // nslip x nslip solve in the total densities (see reduced_hardening)
                nFEvals = updateHOrowanReduced(this, &hs_u[0], &ihs_o[0], dt, nu, outputLevel);
             }
             else {
@@ -1380,79 +1440,88 @@ namespace ecmech {
 
          /**
           * Reduced form of the log-form dislocation density update, in the
-          * total densities only.
+          * total densities only (see OrowanReducedHProblem for the equations;
+          * symbols as in solve_orowan_mobile).
           *
-          * The update solves, per slip system i (y = log density, H = e^y,
-          * f_i = sum_j a_ij H_t,j the forest density, alpha = c_mult - c_trap,
-          * beta = c_ann * d_ann, nu_i fixed from the beginning of the step):
-          *   mobile: y_m,i - y_m,i^o = dt nu_i (alpha sqrt(f_i) - beta H_m,i)
-          *   total : y_t,i - y_t,i^o = dt nu_i H_m,i (c_mult sqrt(f_i) - beta H_m,i) / H_t,i
-          * Each mobile equation involves only its own mobile density and the
-          * totals (through f), and g(y) = y - y^o - dt nu (alpha sqrt(f) - beta e^y)
-          * has g' = 1 + dt nu beta e^y > 0 and g'' > 0, so for given totals it
-          * has exactly one root, found here by scalar Newton from y^o. That
-          * leaves an nslip x nslip system in the totals instead of the
-          * 2 nslip x 2 nslip coupled one (whose mobile-wrt-mobile and
-          * total-wrt-mobile blocks are diagonal); its Jacobian is the Schur
-          * complement of the coupled one, obtained here by implicit
-          * differentiation of the mobile equations.
+          * For given y_t: qT_i = e^(yT_i), f_i = sum_j A_mat_ij qT_j, and per slip
+          * system the mobile solve g_i(yM_i) = 0 (solve_orowan_mobile) gives yM_i
+          * and qM_i = e^(yM_i). Then
+          *   Δt sdotT_i = Δt v_i qM_i (c_mult √f_i - c_ann d_ann qM_i) / qT_i
           *
-          * @param[in]  y_t   log total densities (nslip)
-          * @param[in]  y_m_o log mobile densities at the beginning of the step
-          * @param[in]  nu    evolution rates, as from getEvolVals (nslip)
-          * @param[in]  dt    time step
-          * @param[out] y_m   log mobile densities solving the mobile equations
-          * @param[out] S     right-hand side of the total equations, i.e. the
-          *                   predicted increment of y_t (nslip)
-          * @param[out] dS    dS_i/dy_t,j, row-major nslip x nslip, or nullptr
+          * Its derivatives d(Δt sdotT_i)/dyT_j, by the chain rule through yM_i(y_t):
+          *   d√f_i/dyT_j  = A_mat_ij qT_j / (2 √f_i)                [dsqrt_fD_dy_t]
+          *   dyM_i/dyT_j  = -(dg_i/dyT_j) / (dg_i/dyM_i)             (implicit function theorem)
+          *                = Δt v_i (c_mult - c_trap) d√f_i/dyT_j / (1 + Δt v_i c_ann d_ann qM_i)  [dy_m_dy_t, dg_dy_m]
+          *   d(Δt sdotT_i)/dyT_j = Δt v_i / qT_i ((c_mult √f_i - 2 c_ann d_ann qM_i) qM_i dyM_i/dyT_j
+          *                                        + c_mult qM_i d√f_i/dyT_j)
+          *                        - delta_ij Δt sdotT_i
+          * (the last term from the 1/qT_i). This equals the Schur complement of
+          * the full 2 nslip x 2 nslip Jacobian on its total-density block, whose
+          * mobile-mobile block is diagonal (see the performance summary, 5.1).
+          *
+          * @param[in]  y_t        yT, log total densities (nslip)
+          * @param[in]  y_m_o      yM^o, log mobile densities at the start of the step
+          * @param[in]  nu        v_i, as from getEvolVals (nslip)
+          * @param[in]  dt        Δt
+          * @param[out] y_m        yM solving the mobile equations
+          * @param[out] dt_sdot_t Δt sdotT_i (nslip): the predicted increment of yT_i
+          * @param[out] dsdot     d(Δt sdotT_i)/dyT_j, row-major nslip x nslip, or nullptr;
+          *                       with res_scale and x_scale given, instead the outer
+          *                       solver's scaled Jacobian
+          *                       delta_ij - res_scale_i x_scale_j d(Δt sdotT_i)/dyT_j
+          * @param[in]  y_m_guess  initial guesses for the mobile solves, or nullptr for y_m_o
+          * @param[in]  res_scale, x_scale  the outer problem's scaling (see dsdot), or nullptr
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
          inline
          void
-         reducedHardening(const R* const y_t,
+         reduced_hardening(const R* const y_t,
                           const R* const y_m_o,
                           const R* const nu,
                           const double dt,
                           R* const y_m,
-                          R* const S,
-                          R* const dS,
-                          const R* const y_m_g = nullptr,
-                          const R* const rs = nullptr,
-                          const R* const xs = nullptr) const
+                          R* const dt_sdot_t,
+                          R* const dsdot,
+                          const R* const y_m_guess = nullptr,
+                          const R* const res_scale = nullptr,
+                          const R* const x_scale = nullptr) const
          {
             constexpr int n = SlipGeom::nslip;
-            R Ht[n];
-            for (int i = 0; i < n; i++) { Ht[i] = exp(y_t[i]); }
-            R forest[n];
-            vecsVMa<n>(&forest[0], &m_a_mat[0], &Ht[0]);
-            const double alpha = m_c_mult - m_c_trap;
-            const double beta = m_c_ann * m_d_ann;
+            R q[n];            // total densities qT_i = e^(yT_i)
+            for (int i = 0; i < n; i++) { q[i] = exp(y_t[i]); }
+            R forest_dis[n];   // forest densities f_i = sum_j A_mat_ij qT_j
+            vecsVMa<n>(&forest_dis[0], &m_a_mat[0], &q[0]);
+            const double c_mult_trap = m_c_mult - m_c_trap;
+            const double c_ann_d_ann = m_c_ann * m_d_ann;
             for (int i = 0; i < n; i++) {
-               const R sf = sqrt(forest[i]);
-               const R a_i = dt * nu[i];
-               // mobile log-density from its (scalar, monotone) update equation,
-               // by SNLS's bracketed Newton
-               // initial guess: y_m_g (e.g. the last outer iteration's values), else the old value
-               const MobileSol<R> sol = solveOrowanMobile<R>(y_m_o[i], a_i, R(alpha * sf), beta, y_m_g ? y_m_g[i] : y_m_o[i]);
-               const R y = sol.y;
-               const R Hm = sol.Hm;
-               y_m[i] = y;
-               S[i] = a_i * Hm * (m_c_mult * sf - beta * Hm) / Ht[i];
-               if (dS) {
-                  const R gp = one + a_i * beta * Hm;
+               const R sqrt_fD = sqrt(forest_dis[i]);
+               const R dt_nu = dt * nu[i];
+               // sqrt_fD = √f_i (named as in getSdotN); mobile log-density yM_i
+               // from g_i(yM_i) = 0, by SNLS's bracketed
+               // Newton; started from y_m_guess (e.g. the last outer iteration's values)
+               const OrowanMobileSolution<R> sol = solve_orowan_mobile<R>(y_m_o[i], dt_nu, R(c_mult_trap * sqrt_fD), c_ann_d_ann,
+                                                             y_m_guess ? y_m_guess[i] : y_m_o[i]);
+               const R q_m = sol.q_m;
+               y_m[i] = sol.y_m;
+               // Δt sdotT_i = Δt v_i qM_i (c_mult √f_i - c_ann d_ann qM_i) / qT_i
+               dt_sdot_t[i] = dt_nu * q_m * (m_c_mult * sqrt_fD - c_ann_d_ann * q_m) / q[i];
+               if (dsdot) {
+                  const R dg_dy_m = one + dt_nu * c_ann_d_ann * q_m;                     // dg_i/dyM_i
                   for (int j = 0; j < n; j++) {
-                     const R dsf = m_a_mat[i * n + j] * Ht[j] / (2.0 * sf);   // d sqrt(f_i) / d y_t,j
-                     const R dym = a_i * alpha * dsf / gp;                    // d y_m,i / d y_t,j
-                     R v = a_i / Ht[i] * ((m_c_mult * sf - 2.0 * beta * Hm) * Hm * dym + m_c_mult * Hm * dsf)
-                           - ((i == j) ? S[i] : R(0.0));
-                     if (rs) {
-                        // the caller's scaled Jacobian, -rs_i xs_j dS_ij + delta_ij, written once
-                        // (a second pass over it cost the GPU kernels ~1.3 KB of stack)
-                        v *= -rs[i] * xs[j];
+                     const R dsqrt_fD_dy_t = m_a_mat[i * n + j] * q[j] / (2.0 * sqrt_fD); // d√f_i/dyT_j
+                     const R dy_m_dy_t = dt_nu * c_mult_trap * dsqrt_fD_dy_t / dg_dy_m;     // dyM_i/dyT_j
+                     R v = dt_nu / q[i] * ((m_c_mult * sqrt_fD - 2.0 * c_ann_d_ann * q_m) * q_m * dy_m_dy_t
+                                           + m_c_mult * q_m * dsqrt_fD_dy_t)
+                           - ((i == j) ? dt_sdot_t[i] : R(0.0));
+                     if (res_scale) {
+                        // the outer solver's scaled Jacobian, written here in one pass
+                        // (a second pass over it in computeRJ cost the GPU kernels ~1.3 KB of stack)
+                        v *= -res_scale[i] * x_scale[j];
                         if (i == j) { v += 1.0; }
                      }
-                     dS[i * n + j] = v;
+                     dsdot[i * n + j] = v;
                   }
                }
             }
@@ -1490,7 +1559,7 @@ namespace ecmech {
           * (multiplication, trapping, annihilation) and their Jacobian, in log space if
           * `LOGFORM`, for the coupled vector-hardness SNLS solve (#updateHN, used for
           * the non-log form or with ECMECH_OROWAN_FULL_HSOLVE; the log form normally
-          * uses #reducedHardening instead) -- see the
+          * uses #reduced_hardening instead) -- see the
           * "Hardening law" equations and symbol table in the file-level documentation
           * in ECMech_kinetics_OrowanD.h.
           *

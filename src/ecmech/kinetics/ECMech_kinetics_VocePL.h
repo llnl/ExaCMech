@@ -70,9 +70,9 @@ namespace ecmech {
          /// so on some hardware recomputing them is faster than keeping the
          /// values; ENABLE_VOCE_KINETICS_REUSE=OFF turns the reuse off.
 #if defined(ECMECH_VOCE_NO_KINETICS_REUSE)
-         static constexpr bool reuseEvaluations = false;
+         static constexpr bool reuse_evaluations = false;
 #else
-         static constexpr bool reuseEvaluations = true;
+         static constexpr bool reuse_evaluations = true;
 #endif
          /** @brief Number of parameters: 3 power-law + 5 Voce hardening + nH initial-state + (1 more if `nonlinear`). */
          static constexpr int nParams = 3 + 5 + nH + (nonlinear ? 1 : 0);
@@ -320,6 +320,7 @@ namespace ecmech {
           * each slip system.
           * @param[in] tau Resolved shear stress on each slip system [stress units].
           * @param[in] vals Kinetic values from getVals; `vals[0]` is the shared CRSS.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -367,6 +368,7 @@ namespace ecmech {
           * ECMech_value_type.h).
           * Per-point branches use masks; `log_where`/`exp_where` evaluate only
           * the points that take the power-law branch.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -389,15 +391,15 @@ namespace ecmech {
             const R t_frac = tau * g_i;
             const R at = fabs(t_frac);
 
-            const auto act = (at > m_t_min);
-            if (any(act)) {
-               l_act = act;
-               const auto ovf = act && (at > m_t_max);
-               if (any(ovf)) {
+            const auto above_t_min = (at > m_t_min);
+            if (any(above_t_min)) {
+               l_act = above_t_min;
+               const auto above_t_max = above_t_min && (at > m_t_max);
+               if (any(above_t_max)) {
                   // ML_ERROR_RETURN_VAL_IF(exp_arg > ln_gam_ratio_ovf, ...
-                  set_where(ovf, gdot, copysign(R(ecmech::gam_ratio_ovffx * m_gam_w), tau));
+                  set_where(above_t_max, gdot, copysign(R(ecmech::gam_ratio_ovffx * m_gam_w), tau));
                }
-               const auto pl = act && !(at > m_t_max);
+               const auto pl = above_t_min && !(at > m_t_max);
                if (any(pl)) {
                   const R abslog = log_where(pl, at);
                   const R blog = m_xn * abslog;

@@ -510,6 +510,7 @@ namespace ecmech {
           * each slip system.
           * @param[in] tau Resolved shear stress on each slip system τ [stress units].
           * @param[in] vals Kinetic values from getVals.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -551,6 +552,7 @@ namespace ecmech {
           * ECMech_value_type.h).
           * @param active The points that need the result (true for one point);
           * pow() is evaluated only for them.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -573,30 +575,30 @@ namespace ecmech {
                if (m_p != one) { // the m_p == one case keeps p_func = t_frac
                   const auto gen = active && !tiny;
                   if (any(gen)) {
-                     const R t_s = select(gen, t_frac, R(one));
-                     R pf = pow_where(gen, fabs(t_s), m_p);
-                     pf = copysign(pf, t_s);
-                     set_where(gen, p_func, pf);
-                     set_where(gen, mts_dfac, mts_dfac * m_p * pf / t_s);
+                     const R t_frac_safe = select(gen, t_frac, R(one));
+                     R t_frac_pow_p = pow_where(gen, fabs(t_frac_safe), m_p);
+                     t_frac_pow_p = copysign(t_frac_pow_p, t_frac_safe);
+                     set_where(gen, p_func, t_frac_pow_p);
+                     set_where(gen, mts_dfac, mts_dfac * m_p * t_frac_pow_p / t_frac_safe);
                   }
                }
             }
 
             const R q_arg = one - p_func;
-            const auto qsmall = (q_arg < idp_tiny_sqrt);
+            const auto q_arg_small = (q_arg < idp_tiny_sqrt);
             R pq_fac = q_arg;
             if (!qOne && m_q != one) {
-               const auto gen = active && !qsmall;
+               const auto gen = active && !q_arg_small;
                if (any(gen)) {
-                  const R q_s = select(gen, q_arg, R(one));
-                  const R temp = pow_where(gen, fabs(q_s), m_q);
-                  set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_s));
-                  set_where(gen, pq_fac, copysign(temp, q_s));
+                  const R q_arg_safe = select(gen, q_arg, R(one));
+                  const R temp = pow_where(gen, fabs(q_arg_safe), m_q);
+                  set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_arg_safe));
+                  set_where(gen, pq_fac, copysign(temp, q_arg_safe));
                }
             }
-            if (any(qsmall)) {
-               set_where(qsmall, mts_dfac, zero);
-               set_where(qsmall, pq_fac, zero);
+            if (any(q_arg_small)) {
+               set_where(q_arg_small, mts_dfac, zero);
+               set_where(q_arg_small, pq_fac, zero);
             }
 
             exp_arg = -c_e * pq_fac;
@@ -627,6 +629,7 @@ namespace ecmech {
           * Value type R: one point (double) or a pack of points (see
           * ECMech_value_type.h); each early return of the scalar law is a
           * per-point "done" mask, and for double these are the original returns.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -688,16 +691,16 @@ namespace ecmech {
                   return;
                }
                R temp;
-               const auto lin = (exp_arg < idp_eps_sqrt);
-               if (any(lin)) {
+               const auto small_exp_arg = (exp_arg < idp_eps_sqrt);
+               if (any(small_exp_arg)) {
                   // linear expansion is cheaper and more accurate
-                  set_where(lin, gdot_r, gam_r * exp_arg);
-                  set_where(lin, temp, one - exp_arg);
+                  set_where(small_exp_arg, gdot_r, gam_r * exp_arg);
+                  set_where(small_exp_arg, temp, one - exp_arg);
                }
-               if (any(!lin)) {
-                  const R e = exp_where(!done && !lin, -exp_arg);
-                  set_where(!lin, temp, e);
-                  set_where(!lin, gdot_r, gam_r * (one - e));
+               if (any(!small_exp_arg)) {
+                  const R e = exp_where(!done && !small_exp_arg, -exp_arg);
+                  set_where(!small_exp_arg, temp, e);
+                  set_where(!small_exp_arg, gdot_r, gam_r * (one - e));
                }
                dgdot_r_dtau = gam_r * temp / m_wrD;
             }
@@ -765,14 +768,14 @@ namespace ecmech {
                set_where(pl, dgdot_w_dtau, dgdot_w_dtau + contrib);
             }
 
-            const auto fin = !done;
-            l_act = l_act || fin;
+            const auto not_done = !done;
+            l_act = l_act || not_done;
             {
                const R g = one / (one / gdot_w + one / gdot_r);
                const R gdrdiv2 = one / (gdot_r * gdot_r);
                const R gdwdiv2 = one / (gdot_w * gdot_w);
-               set_where(fin, dgdot_dtau, (g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
-               set_where(fin, gdot, copysign(g, tau));
+               set_where(not_done, dgdot_dtau, (g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
+               set_where(not_done, gdot, copysign(g, tau));
             }
          } // evalGdot
 

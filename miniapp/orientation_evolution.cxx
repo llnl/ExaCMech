@@ -77,8 +77,8 @@ int main(int argc, char *argv[]){
       size_t v = 0; cudaDeviceGetLimit(&v, cudaLimitStackSize);
       std::cout << "cudaLimitStackSize = " << v << std::endl;
    }
-   if (const char* hp = std::getenv("ECMECH_CUDA_HEAP")) {
-      cudaDeviceSetLimit(cudaLimitMallocHeapSize, std::strtoull(hp, nullptr, 10));
+   if (const char* heap_env = std::getenv("ECMECH_CUDA_HEAP")) {
+      cudaDeviceSetLimit(cudaLimitMallocHeapSize, std::strtoull(heap_env, nullptr, 10));
       size_t v = 0; cudaDeviceGetLimit(&v, cudaLimitMallocHeapSize);
       std::cout << "cudaLimitMallocHeapSize = " << v << std::endl;
    }
@@ -590,17 +590,17 @@ int main(int argc, char *argv[]){
    // Full-precision checksums of the final state, so changes that should be
    // bitwise neutral can be verified (the per-step stress print has 6 digits).
    {
-      const double* sv_h = mm.getHost(state_vars, class_device);
-      const double* cs_h = mm.getHost(cauchy_stress_array, class_device);
-      long double s_sv = 0.0L, s_abs = 0.0L, s_cs = 0.0L;
-      for (int k = 0; k < nqpts * num_state_vars; ++k) { s_sv += sv_h[k]; s_abs += std::fabs(sv_h[k]); }
-      for (int k = 0; k < nqpts * ecmech::nsvec; ++k) { s_cs += cs_h[k]; }
-      std::printf("CHECKSUM state %.17Lg abs_state %.17Lg stress %.17Lg\n", s_sv, s_abs, s_cs);
+      const double* state_vars_host = mm.getHost(state_vars, class_device);
+      const double* cauchy_host = mm.getHost(cauchy_stress_array, class_device);
+      long double sum_state = 0.0L, sum_abs_state = 0.0L, sum_cauchy = 0.0L;
+      for (int k = 0; k < nqpts * num_state_vars; ++k) { sum_state += state_vars_host[k]; sum_abs_state += std::fabs(state_vars_host[k]); }
+      for (int k = 0; k < nqpts * ecmech::nsvec; ++k) { sum_cauchy += cauchy_host[k]; }
+      std::printf("CHECKSUM state %.17Lg abs_state %.17Lg stress %.17Lg\n", sum_state, sum_abs_state, sum_cauchy);
       // the material tangent of the last step (ecmech::nsvec2 entries per point)
-      const double* mt_h = mm.getHost(ddsdde_array, class_device);
-      long double s_mt = 0.0L, s_mtabs = 0.0L;
-      for (int k = 0; k < nqpts * ecmech::nsvec2; ++k) { s_mt += mt_h[k]; s_mtabs += std::fabs(mt_h[k]); }
-      std::printf("CHECKSUM tangent %.17Lg abs_tangent %.17Lg\n", s_mt, s_mtabs);
+      const double* mtan_host = mm.getHost(ddsdde_array, class_device);
+      long double sum_mtan = 0.0L, sum_abs_mtan = 0.0L;
+      for (int k = 0; k < nqpts * ecmech::nsvec2; ++k) { sum_mtan += mtan_host[k]; sum_abs_mtan += std::fabs(mtan_host[k]); }
+      std::printf("CHECKSUM tangent %.17Lg abs_tangent %.17Lg\n", sum_mtan, sum_abs_mtan);
    }
 
    double time = run_time.elapsed();

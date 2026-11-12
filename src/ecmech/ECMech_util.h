@@ -191,6 +191,8 @@ namespace ecmech {
     * Computes element-wise sum of two vectors.
     * 
     * Mathematical operation: v_i = a_i + b_i for i = 0, ..., n-1
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, class R, class T1, class T2>
    __ecmech_hdev__
@@ -216,6 +218,8 @@ namespace ecmech {
     * 
     * @note "Adiag" in function name suggests diagonal matrix interpretation:
     *       If A = diag(a), then v = A·b
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, class R, class T1, class T2>
    __ecmech_hdev__
@@ -239,6 +243,7 @@ namespace ecmech {
     * Mathematical operation: y = Σ_{i=0}^{n-1} a_i · b_i
     * 
     * Common usage: Resolving stress onto slip systems, computing strain energy
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<int n, class R, class T2>
    __ecmech_hdev__
@@ -263,6 +268,7 @@ namespace ecmech {
     * Mathematical operation: s = Σ_{i=0}^{n-1} |a_i|
     * 
     * Common usage: Checking convergence criteria, measuring slip rate totals
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<int n, class R>
    __ecmech_hdev__
@@ -328,6 +334,7 @@ namespace ecmech {
     * Mathematical operation: ‖v‖ = √(Σ_{i=0}^{n-1} v_i²)
     * 
     * Common usage: Normalization, checking convergence, computing tensor magnitudes
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<int n, class R>
    __ecmech_hdev__
@@ -351,6 +358,8 @@ namespace ecmech {
     * Scales vector by scalar value.
     * 
     * Mathematical operation: v_i = x · a_i for i = 0, ..., n-1
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, class R, class T1, class T2>
    __ecmech_hdev__
@@ -373,6 +382,8 @@ namespace ecmech {
     * Mathematical operation: a_i ← s · a_i for i = 0, ..., n-1
     * 
     * @note Modifies input array in place (destructive operation)
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, class R, class T1>
    __ecmech_hdev__
@@ -478,6 +489,8 @@ namespace ecmech {
     * @param[in] v Input vector (length n)
     * 
     * @note Unlike FORTRAN matt_x_vec_5, output is first argument
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, class R, class T1, class T2>
    __ecmech_hdev__
@@ -505,6 +518,8 @@ namespace ecmech {
     * @param[out] p Result vector (length q)
     * @param[in] a Input row vector (length n)
     * @param[in] M Matrix in row-major order (n×q)
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
@@ -531,6 +546,8 @@ namespace ecmech {
     * @param[out] p Result vector (length n)
     * @param[in] M Matrix in row-major order (n×q)
     * @param[in] a Input vector (length q)
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
@@ -556,6 +573,8 @@ namespace ecmech {
     * @param[out] p Result vector (length n)
     * @param[in] M Square matrix in row-major order (n×n)
     * @param[in] a Input vector (length n)
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, class R, class T1, class T2>
    __ecmech_hdev__
@@ -586,6 +605,8 @@ namespace ecmech {
     * @param[in] B Second matrix (n×q) in row-major order
     * 
     * @note Output P is initialized to zero before accumulation
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, int q, class R, class T1, class T2>
    __ecmech_hdev__
@@ -623,6 +644,8 @@ namespace ecmech {
     * @param[in] B Second matrix (m×q) in row-major order
     * 
     * @note Output P is initialized to zero before accumulation
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, int m, int q, class R, class T1, class T2>
    __ecmech_hdev__
@@ -658,6 +681,8 @@ namespace ecmech {
     * @param[in] B Second matrix (q×m) in row-major order
     * 
     * @note Output P is initialized to zero before accumulation
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, int m, int q, class R, class T1, class T2>
    __ecmech_hdev__
@@ -831,6 +856,7 @@ namespace ecmech {
     * 
     * @note Always non-negative by definition
     * @note Equivalent to sqrt(2/3) times the deviatoric tensor norm
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<class R>
    __ecmech_hdev__
@@ -1165,6 +1191,8 @@ namespace ecmech {
     * @note Name "inv" is historical/legacy - not related to quaternion inverse
     * @note This is a helper function, typically called via emap_to_quat
     * @note Input axis n̂ should be unit length for correct quaternion norm
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1>
    __ecmech_hdev__
@@ -1194,6 +1222,7 @@ namespace ecmech {
     * 
     * @note Special case: ‖emap‖ = 0 → quat = [1, 0, 0, 0] (identity rotation)
     * @note ‖quat‖ = 1 (unit quaternion) upon return
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<class R>
    __ecmech_hdev__
@@ -1271,6 +1300,8 @@ namespace ecmech {
     * @note For rotations: q = q1 ⊗ q2 means "rotate by q2, then by q1"
     * @note Result is NOT automatically normalized
     * @note Quaternion multiplication is NON-commutative: q1 ⊗ q2 ≠ q2 ⊗ q1
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1, class T2>
    __ecmech_hdev__
@@ -1395,6 +1426,8 @@ namespace ecmech {
     * @see emap_to_quat for converting rotation vector to quaternion
     * @see quat_prod for underlying quaternion multiplication
     * @see quat_rel_rotation for computing incremental rotations
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1, class T2>
    __ecmech_hdev__
@@ -1423,6 +1456,8 @@ namespace ecmech {
     * @note Result is orthogonal: C^T · C = I
     * @note det(C) = +1 (proper rotation, right-handed)
     * @note quat should be normalized: ‖quat‖ = 1
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1>
    __ecmech_hdev__
@@ -1471,6 +1506,8 @@ namespace ecmech {
     * @note R is orthogonal: R^T · R = I (5×5 identity)
     * @note Preserves norm: ‖vecd_sample‖ = ‖vecd_lattice‖
     * @note Used in lattice rotation updates during crystal plasticity evolution
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1>
    __ecmech_hdev__
@@ -1577,6 +1614,8 @@ namespace ecmech {
     * @see skewToVeccp for converting skew matrix to axial vector
     * @see vecsMaTb for computing outer product (used to build full commutator)
     * @see matToPQ for decomposing matrices into symmetric/skew parts
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1>
    __ecmech_hdev__
@@ -1651,6 +1690,7 @@ namespace ecmech {
     * @param[in] emap Exponential map (angle-axis, length 3)
     * 
     * @note Used in chain rule: ∂f/∂emap = (∂f/∂quat) · (∂quat/∂emap)
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<class R>
    __ecmech_hdev__
@@ -1735,6 +1775,8 @@ namespace ecmech {
     * @param[in] quat Unit quaternion [q0, q1, q2, q3]
     * 
     * @note Less commonly used than d_rot_mat_vecd variants (those work on 5-vectors)
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1>
    __ecmech_hdev__
@@ -1838,6 +1880,8 @@ namespace ecmech {
     * 
     * @see d_rot_mat_vecd_smop for the inverse transformation (lattice to sample)
     * @see get_rot_mat_vecd for computing the 5×5 rotation matrix itself
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1, class T2>
    __ecmech_hdev__
@@ -1935,6 +1979,7 @@ namespace ecmech {
     * 
     * @see d_rot_mat_vecd_latop for deviatoric tensor version
     * @see skewToVeccp for converting skew matrix to axial vector
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
     */
    template<class R, class T2>
    __ecmech_hdev__
@@ -2044,6 +2089,8 @@ namespace ecmech {
     * @see d_rot_mat_vecd_latop for rotation matrix derivatives
     * @see d_rot_mat_wveccp_latop for spin rotation derivatives
     * @see get_c_quat for quaternion composition
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1, class T2, class T3, class T4, class T5, class T6>
    __ecmech_hdev__
@@ -2134,6 +2181,8 @@ namespace ecmech {
     * 
     * @see d_rot_mat_vecd_latop for the inverse transformation (sample to lattice)
     * @see get_rot_mat_vecd for computing the 5×5 rotation matrix itself
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<class R, class T1, class T2>
    __ecmech_hdev__
@@ -2249,6 +2298,8 @@ namespace ecmech {
     * 
     * @see get_rot_mat_vecd for computing qr5x5 from rotation matrix
     * @see mtan_conv_sd_svec for converting tangent representations
+    * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+    * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
     */
    template<int n, bool l_T, class R, class T1, class T2>
    __ecmech_hdev__

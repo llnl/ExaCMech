@@ -633,7 +633,7 @@ namespace ecmech {
                }
 
 #if defined(ECMECH_SIMD_EXPT)
-               const simd::PackArrays packArrays{dt, m_tolerance,
+               const simd::PackArrays pack_arrays{dt, m_tolerance,
                   def_rate_d6vV, m_strides[istride_def_rate], spin_vecV, m_strides[istride_spin_v],
                   rel_vol_ratiosV, m_strides[istride_vol_ratio], internal_energyV, m_strides[istride_int_eng],
                   cauchy_stress_d6pV, m_strides[istride_stress], histV, m_strides[istride_history],
@@ -642,9 +642,9 @@ namespace ecmech {
 #if defined(ECMECH_SIMD_EXPT)
                // Experiment: SIMD across points on the CPU/OpenMP backends (ECMECH_SIMD=1)
                if constexpr (simd::simd_supported<SlipGeom, Kinetics, ThermoElastN>::value) {
-                  if (m_accel != ECM_EXEC_STRAT_GPU && simd::simdEnabled()) {
+                  if (m_accel != ECM_EXEC_STRAT_GPU && simd::simd_enabled()) {
                      simd::getResponseSimd<SlipGeom, Kinetics, ThermoElastN, EosModel>
-                        (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, packArrays, m_accel == ECM_EXEC_STRAT_OPENMP);
+                        (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, pack_arrays, m_accel == ECM_EXEC_STRAT_OPENMP);
                      if (this->reduceStatus(histV, nPassed)) {
                         getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
                                          cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
@@ -664,10 +664,14 @@ namespace ecmech {
 
 
 
-            /// One thread per point: the original getResponse kernel, with the
-            /// GPU block size as a template parameter.
-
-
+            /**
+             * @brief One thread per material point: the original getResponse
+             * kernel, getResponseSngl per point, launched with snls::forall.
+             *
+             * @tparam BLOCK GPU block size (threads per block) of the launch;
+             * ECMECH_GPU_THREADS by default.
+             * The parameters are those of getResponseECM.
+             */
             template<int BLOCK>
             __ecmech_host__
             void getResponseSolo(const double & dt,

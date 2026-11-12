@@ -298,6 +298,8 @@ namespace evptn {
          * 
          * @note Output kirchoff_stress has 6 independent components (symmetric Voigt notation)
          * @note The 7th component (pressure) is not set here; managed by EOS separately
+         * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+         * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
          */
         template<class R, class T1, class T2, class T3, class T4>
         __ecmech_hdev__
@@ -373,6 +375,8 @@ namespace evptn {
          * 
          * @note For cubic symmetry, dT/dε[iSvecS,:] = 0 (no deviatoric-pressure coupling)
          * @note Method signature identical for cubic and hexagonal (same interface)
+         * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+         * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
          */
         template<class R, class T1>
         __ecmech_hdev__
@@ -416,6 +420,8 @@ namespace evptn {
           * @param[out] cauchy_stress Cauchy stress (6-component symmetric)
           * @param[in] kirchoff_stress Kirchhoff stress (6-component symmetric)
           * @param[in] inv_det_v_e Inverse of elastic deformation determinant 1/det(V^e)
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+          * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
           */
         template<class R, class T1, class T2>
         __ecmech_hdev__
@@ -447,6 +453,8 @@ namespace evptn {
          * @param[in] elast_dev_press_vec Scaled strain vector [nsvec], same as eval()
          * @param[in] energy_vol_ref Internal energy (unused for cubic; Grüneisen)
          * @return true (nonzero whenever the crystal is elastically strained)
+         * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+         * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
          */
         template<class R, class T1, class T2>
         __ecmech_hdev__
@@ -500,6 +508,8 @@ namespace evptn {
          *
          * @note The volumetric (S,S) pressure stiffness comes from the equation of
          *       state and is added separately by the caller
+         * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+         * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
          */
         template<size_t N=ecmech::ntvec, size_t M=ecmech::nsvec, class R, class T1, class T2, class T3, class T4, class T5>
         __ecmech_hdev__
@@ -768,6 +778,8 @@ namespace evptn {
          * @param[in] pressure_EOS Pressure from EOS
          * @param[in] energy_vol_ref internal energy
          * @param[in] inv_a_vol Inverse volume scaling
+         * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+         * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
          */
         template<class R, class T1, class T2, class T3, class T4>
         __ecmech_hdev__
@@ -864,6 +876,8 @@ namespace evptn {
          * 
          * @note Full hexagonal stiffness (with m_K_sdax3) used in multCauchyDif
          * @note iTvecHex = 1 (basal plane component) has special anisotropy
+         * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+         * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
          */
         template<class R, class T1>
         __ecmech_hdev__
@@ -898,6 +912,8 @@ namespace evptn {
           * @param[out] cauchy_stress Cauchy stress
           * @param[in] kirchoff_stress Kirchhoff stress
           * @param[in] inv_det_v_e Inverse elastic deformation determinant
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+          * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
           */
         template<class R, class T1, class T2>
         __ecmech_hdev__
@@ -932,6 +948,8 @@ namespace evptn {
          * @param[in] elast_dev_press_vec Scaled strain vector [nsvec], same as eval()
          * @param[in] energy_vol_ref Internal energy (Grüneisen term)
          * @return true, indicating the sensitivity is (generically) nonzero
+         * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+         * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
          */
         template<class R, class T1, class T2>
         __ecmech_hdev__
@@ -986,6 +1004,8 @@ namespace evptn {
           *            (Δt at the current level of EOS decoupling)
           * @param[in] inv_det_v_e Inverse elastic deformation determinant
           * @param[in] inv_a_vol Inverse volume factor
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+          * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
           */
         template<size_t N=ecmech::ntvec, size_t M=ecmech::nsvec, class R, class T1, class T2, class T3, class T4, class T5>
         __ecmech_hdev__

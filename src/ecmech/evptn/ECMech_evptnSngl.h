@@ -122,6 +122,8 @@ namespace evptn {
  * @tparam ThermoElastN Thermoelastic class
  * @tparam ProbState Problem state container
  * @tparam RStarSolve If true, enables secondary rotation solve (default: false)
+ * @tparam SkipHardening If true, only the EOS part is done here and the caller
+ * updates the hardness itself (the pack path runs it on the pack; default: false)
  * 
  * @param[in] slipGeom Slip geometry object
  * @param[in] kinetics Kinetics object
@@ -152,7 +154,6 @@ namespace evptn {
  * @note Side effects on prob_state are essential (not const)
  * @note Energy contribution completed in postprocess() after stress converges
  */
-/// SkipHardening: only the EOS part (the caller updates the hardness itself)
 template<class SlipGeom, class Kinetics, class EosModel, class ThermoElastN, class ProbState, bool RStarSolve=false, bool SkipHardening=false>
 __ecmech_hdev__
 inline
@@ -638,93 +639,11 @@ void postprocess(ProblemState& prob_state,
 #endif
 }
 
-/**
- * @brief Complete time step integration for single material point (main interface).
- * 
- * This is the primary entry point for crystal plasticity integration. It orchestrates
- * the complete sequence: preprocessing → nonlinear solve → post-processing.
- * 
- * **Function signature summary**:
- * - Input: Beginning-of-step state, prescribed kinematics, material models, time step
- * - Output: End-of-step stress, updated history variables, optional tangent
- * - Return: Success/failure flag
- * 
- * **Integration sequence**:
- * ```
- * 1. Create ProblemState from input arrays
- * 2. preprocess(): EOS, hardening, energy initialization
- * 3. Create EvptnUpdstProblem for coupled elastic-rotation solve
- * 4. Create SNLS solver and configure
- * 5. main_problem(): Solve nonlinear system
- * 6. If tangent requested: computeTangentStiffness()
- * 7. stateFromX(): Extract converged elastic strain and orientation
- * 8. Store number of function evaluations in history
- * 9. postprocess_prob(): Compute plastic work, flow strength
- * 10. postprocess(): Rotate stress, finalize energy
- * ```
- * 
- * **Template parameters**:
- * @tparam SlipGeom Slip geometry class (e.g., SlipGeomFCC, SlipGeomBCC)
- * @tparam Kinetics Kinetics class (e.g., KineticsKMBalD, KineticsVocePL)
- * @tparam ThermoElastN Thermoelastic class (e.g., ThermoElastNCubic)
- * @tparam EosModel Equation of state class (e.g., EosModelConst)
- * 
- * @param[in] slipGeom Slip geometry object defining slip systems
- * @param[in] kinetics Kinetics object for rate-dependent strength
- * @param[in] elastN Thermoelastic object for stress-strain relation
- * @param[in] eos Equation of state object for pressure-volume-energy
- * @param[in] dt Time step size [time units]
- * @param[in] tolerance Convergence tolerance for nonlinear solver [dimensionless]
- * @param[in] def_rate_d6v_sample Prescribed deformation rate [1/time, nsvp = 7 components]
- *                                 Only first ntvec = 5 used (deviatoric)
- * @param[in] spin_vec_sample Prescribed spin [1/time, ndim = 3 components]
- * @param[in] rel_vol_ratios Volume ratio array [nvr = 4 components]:
- *                           [0] = J_n, [1] = J_{n+1}, [2] = (J_{n+1}-J_n)/dt, [3] = J_{n+1}-J_n
- * @param[in,out] internal_energy Internal energy [energy/volume, ne = 1 component]
- *                                 Updated with plastic work contribution
- * @param[in,out] cauchy_stress_d6p Cauchy stress [stress units, nsvp = 7 components]
- *                                   Input: σ_n, Output: σ_{n+1}
- *                                   Layout: [σ11, σ22, σ33, σ23, σ13, σ12, -p]
- * @param[in,out] hist History variable array [numHist components]
- *                     Contains and updates: orientation, elastic strain, hardening, etc.
- * @param[in,out] tkelv Temperature [Kelvin]
- *                      May be updated by EOS evaluation
- * @param[out] sdd Auxiliary outputs [nsdd = 2 components]:
- *                 [0] = bulk modulus, [1] = shear modulus
- * @param[out] mtanSD Material tangent stiffness [nsvec2 = 36 components or nullptr]
- *                    If nullptr: Skip tangent computation
- *                    If non-null: Compute and store ∂σ/∂Δε
- * @param[in] outputLevel Diagnostic output verbosity (0 = silent)
- * 
- * @return true if integration successful, false if solver failed to converge
- * 
- * **History array layout**:
- * Defined by case-specific indices (iHistLbQ, iHistLbGdot, etc.):
- * - Orientation quaternion [4 components]
- * - Slip rates [nslip components]
- * - Elastic deviatoric strain [ntvec = 5 components]
- * - Hardening state [nH components]
- * - Equivalent plastic strain [1 component]
- * - Equivalent plastic strain rate [1 component]
- * - Flow strength [1 component]
- * - Number of function evaluations [1 component]
- * 
- * **Convergence failure**:
- * - Returns false immediately if preprocessing fails (hardening divergence)
- * - Returns false if main nonlinear solve fails to converge
- * - Host code should handle failure (reduce time step, flag element, etc.)
- * 
- * @note Thread-safe: No static storage, can be called in parallel for different points
- * @note GPU-compatible: All functions marked __ecmech_hdev__
- * @note Const correctness: Material models passed by const reference
- * 
- * @see getResponseECM() in ECMech_evptnWrap.h for vectorized batch interface
- * @see ProblemState constructor for history array interpretation
- */
 } // namespace evptn
 } // namespace ecmech
-// getResponseSngl (documented above) is getResponseLanes<double>, the same
-// driver that the CPU SIMD path runs on packs.
+// getResponseSngl (the complete time step for one material point) is defined,
+// with its documentation, in ECMech_evptnLanes.h: it is getResponseLanes<double>,
+// the same driver that the CPU SIMD path runs on packs.
 #include "evptn/ECMech_evptnLanes.h"
 namespace ecmech {
 namespace evptn {

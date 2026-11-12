@@ -435,6 +435,7 @@ namespace ecmech {
           * @param[in] tau Resolved shear stress (`tau[0..nslip-1]`) followed by the
           * pencil-glide angle `chi` (`tau[nslip..2*nslip-1]`).
           * @param[in] vals Kinetic values from getVals.
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -500,14 +501,14 @@ namespace ecmech {
 
             const R gmax = rho * m_bmag * m_vmax * (1.0 - exp(-t_eff/m_tau_drag));
 
-            const auto act = (at > m_t_min);
-            if (any(act)) {
-               l_act = act;
-               const auto ovf = act && (at > m_t_max);
-               if (any(ovf)) {
-                  set_where(ovf, gdot, copysign(R(ecmech::gam_ratio_ovffx * gam_w), tau));
+            const auto above_t_min = (at > m_t_min);
+            if (any(above_t_min)) {
+               l_act = above_t_min;
+               const auto above_t_max = above_t_min && (at > m_t_max);
+               if (any(above_t_max)) {
+                  set_where(above_t_max, gdot, copysign(R(ecmech::gam_ratio_ovffx * gam_w), tau));
                }
-               const auto pl = act && !(at > m_t_max);
+               const auto pl = above_t_min && !(at > m_t_max);
                if (any(pl)) {
                   const R abslog = log(select(pl, at, R(one)));
                   const R blog = xn * abslog;

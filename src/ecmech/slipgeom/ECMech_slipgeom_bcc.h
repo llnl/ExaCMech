@@ -867,6 +867,7 @@ namespace ecmech {
           * @param[out] Q_vec Skew Schmid components (if fill_PQ=true)
           * @param[in] kirchoff Kirchhoff stress (deviatoric 5-vector)
           * @param[in] fill_PQ Whether to fill P_vec and Q_vec arrays
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__ inline void NSprojection(R* taua,
@@ -1017,7 +1018,7 @@ namespace ecmech {
 
          /// The resolved shear stress depends on the stress only (not on the
          /// per-point P), so a pack of points can use the projection directly.
-         static constexpr bool rssFromStress = true;
+         static constexpr bool rss_from_stress = true;
          /// evalRSS for a pack of points (value type R, see ECMech_value_type.h)
          template<class R, class T>
          __ecmech_hdev__ inline void evalRSS(R* taua, 

@@ -12,11 +12,16 @@
 namespace ecmech {
 namespace evptn {
 
-/// The fields of evptn::ProblemState that EvptnUpdstProblem reads, for a
-/// pack of points (value type R)
+/**
+ * @brief The fields of evptn::ProblemState that EvptnUpdstProblem reads, for a
+ * pack of points: lane l of each field holds point l's value.
+ *
+ * @tparam Kinetics kinetics class (for the hardening state size nH)
+ * @tparam R value type: a pack of points (see ECMech_value_type.h)
+ */
 template<class Kinetics, class R>
 struct ProblemStatePack {
-   using value_type = R;
+   using value_type = R; ///< the value type EvptnUpdstProblem is templated on
    double dt;
    R rel_vol_new, energy_new, pressure_EOS, tkelv;
    R elast_d5_n[ecmech::ntvec];
@@ -26,91 +31,120 @@ struct ProblemStatePack {
    R h_state_u[(Kinetics::nH > 0) ? Kinetics::nH : 1];
 };
 
+/// True if the slip geometry SG computes the resolved shear stresses from the
+/// stress alone (SG::rss_from_stress), so one point's geometry serves a pack
 template<class SG, class = void> struct has_rss_from_stress : std::false_type {};
-template<class SG> struct has_rss_from_stress<SG, std::void_t<decltype(SG::rssFromStress)>> : std::true_type {};
+template<class SG> struct has_rss_from_stress<SG, std::void_t<decltype(SG::rss_from_stress)>> : std::true_type {};
 
-/// A dynamic (stress-dependent) slip geometry for a pack of points: each
-/// point's P, Q and extra values (as its own geometry computed them in
-/// preprocess) gathered into packs, behind the interface the templated
-/// problem uses (nslip, nSlipExtra, dynamic, getP, getQ, evalRSS,
-/// getExtras).
+/**
+ * @brief A dynamic (stress-dependent) slip geometry for a pack of points.
+ *
+ * Each point's P and Q matrices and extra values, as its own geometry computed
+ * them in preprocess, gathered into packs, behind the interface the templated
+ * problem uses (nslip, nSlipExtra, dynamic, getP, getQ, evalRSS, getExtras).
+ *
+ * @tparam SG the slip geometry class of one point
+ * @tparam R value type: a pack of points
+ */
 template<class SG, class R>
 struct SlipGeomPack {
    static constexpr int nslip = SG::nslip;
    static constexpr int nSlipExtra = SG::nSlipExtra;
    static constexpr bool dynamic = SG::dynamic;
-   const SG* m_g0 = nullptr; ///< one point's geometry (for projections that depend on the stress only)
-   R m_P[ecmech::ntvec * nslip];
-   R m_Q[ecmech::nwvec * nslip];
-   R m_extras[(nSlipExtra > 0) ? nSlipExtra : 1];
+   const SG* geom_0 = nullptr;                  ///< one point's geometry (for projections that depend on the stress only)
+   R p_vec[ecmech::ntvec * nslip];              ///< P (symmetric Schmid tensors, ntvec x nslip), per lane
+   R q_vec[ecmech::nwvec * nslip];              ///< Q (skew Schmid tensors, nwvec x nslip), per lane
+   R extras[(nSlipExtra > 0) ? nSlipExtra : 1]; ///< the geometry's extra values (SG::getExtras), per lane
 
-   /// gather point l's geometry
-   __ecmech_hdev__ void setLane(int l, const SG& g) {
-      if (!m_g0) { m_g0 = &g; }
+   /**
+    * @brief Gather point l's geometry into lane l.
+    * @param[in] l lane
+    * @param[in] g point l's slip geometry (after its preprocess)
+    */
+   __ecmech_hdev__ void gather_lane(int l, const SG& g) {
+      if (!geom_0) { geom_0 = &g; }
       const double* const P = g.getP();
       const double* const Q = g.getQ();
-      for (int k = 0; k < ecmech::ntvec * nslip; ++k) { set_lane(m_P[k], l, P[k]); }
-      for (int k = 0; k < ecmech::nwvec * nslip; ++k) { set_lane(m_Q[k], l, Q[k]); }
+      for (int k = 0; k < ecmech::ntvec * nslip; ++k) { set_lane(p_vec[k], l, P[k]); }
+      for (int k = 0; k < ecmech::nwvec * nslip; ++k) { set_lane(q_vec[k], l, Q[k]); }
       if constexpr (nSlipExtra > 0) {
          double e[nSlipExtra];
          g.getExtras(e);
-         for (int k = 0; k < nSlipExtra; ++k) { set_lane(m_extras[k], l, e[k]); }
+         for (int k = 0; k < nSlipExtra; ++k) { set_lane(extras[k], l, e[k]); }
       }
    }
-   __ecmech_hdev__ const R* getP() const { return m_P; }
-   __ecmech_hdev__ const R* getQ() const { return m_Q; }
+   /// P per lane, as SG::getP
+   __ecmech_hdev__ const R* getP() const { return p_vec; }
+   /// Q per lane, as SG::getQ
+   __ecmech_hdev__ const R* getQ() const { return q_vec; }
+   /**
+    * @brief Resolved shear stresses, as SG::evalRSS: from the stress alone if
+    * the geometry supports it (has_rss_from_stress), else P^T kirchoff per lane.
+    * @tparam T value type of kirchoff (double or R)
+    */
    template<class T>
    __ecmech_hdev__ void evalRSS(R* taua, const T* const kirchoff, const R* P_vec) const {
       if constexpr (has_rss_from_stress<SG>::value) {
-         m_g0->evalRSS(taua, kirchoff, (const double*)nullptr);
+         geom_0->evalRSS(taua, kirchoff, (const double*)nullptr);
       }
       else {
          vecsVaTM<ecmech::ntvec, nslip>(taua, kirchoff, P_vec);
       }
    }
+   /// The extra values per lane, as SG::getExtras
    __ecmech_hdev__ void getExtras(R* const e) const {
-      for (int k = 0; k < nSlipExtra; ++k) { e[k] = m_extras[k]; }
+      for (int k = 0; k < nSlipExtra; ++k) { e[k] = extras[k]; }
    }
 };
 
-/// kinetics whose slip rates are templated on the value type
+/// True if kinetics class K's slip rates (evalGdots) are templated on the value type R
 template<class K, class R, class = void> struct has_pack_slip_rates : std::false_type {};
 template<class K, class R>
 struct has_pack_slip_rates<K, R, std::void_t<decltype(std::declval<const K&>().evalGdots(
    (R*)nullptr, (R*)nullptr, (const R*)nullptr, (const R*)nullptr))>> : std::true_type {};
-/// kinetics whose hardness update can run on packs
+/// True if kinetics class K's hardening update can run on packs (K::updateHLanes)
 template<class K, class R, class = void> struct has_pack_hardening : std::false_type {};
 template<class K, class R>
 struct has_pack_hardening<K, R, std::void_t<decltype(std::declval<const K&>().updateHLanes(
    (R*)nullptr, (const R*)nullptr, 0.0, (const R*)nullptr))>> : std::true_type {};
 
-/// Models the pack path supports for value type R (others use the scalar path)
+/**
+ * @brief Whether the pack path supports a model for value type R; models it
+ * does not support use the one-point path.
+ * @tparam SlipGeom, Kinetics, ThermoElastN the model's classes
+ * @tparam R value type: a pack of points
+ */
 template<class SlipGeom, class Kinetics, class ThermoElastN, class R>
 struct pack_supported {
    static constexpr bool value = has_pack_slip_rates<Kinetics, R>::value;
 };
 
-/// The point-wise arrays and strides of one getResponseECM call
+/**
+ * @brief The point-wise arrays and strides of one getResponseECM call, as one
+ * argument for getResponseLanes. Each array and stride is the getResponseECM
+ * argument of the same name; point i's data start at array[stride * i].
+ */
 struct PackArrays {
-   double dt, tolerance;
-   const double* def_rate_d6vV; unsigned int def_rate_stride;
-   const double* spin_vecV;     unsigned int spin_v_stride;
-   const double* rel_vol_ratiosV; unsigned int vol_ratio_stride;
-   double* internal_energyV;    unsigned int int_eng_stride;
-   double* cauchy_stress_d6pV;  unsigned int stress_stride;
-   double* histV;               unsigned int history_stride;
-   double* tkelvV;              unsigned int tkelv_stride;
-   double* sddV;                unsigned int sdd_stride;
-   double* mtanSDV;
-   int nPassed;
+   double dt;                                                     ///< time step
+   double tolerance;                                              ///< Newton solve tolerance
+   const double* def_rate_d6vV;   unsigned int def_rate_stride;   ///< deformation rate (d6v)
+   const double* spin_vecV;       unsigned int spin_v_stride;     ///< spin vector
+   const double* rel_vol_ratiosV; unsigned int vol_ratio_stride;  ///< relative volume ratios
+   double* internal_energyV;      unsigned int int_eng_stride;    ///< internal energy (in/out)
+   double* cauchy_stress_d6pV;    unsigned int stress_stride;     ///< Cauchy stress (d6p, in/out)
+   double* histV;                 unsigned int history_stride;    ///< history variables (in/out)
+   double* tkelvV;                unsigned int tkelv_stride;      ///< temperature (in/out)
+   double* sddV;                  unsigned int sdd_stride;        ///< sdd output
+   double* mtanSDV;                                               ///< tangent stiffness (nsvec2 per point), or nullptr
+   int nPassed;                                                   ///< number of points
 };
-/// longest history the padding scratch holds (checked before the launch)
-constexpr int maxPackHist = 128;
+/// Longest history the padding scratch of getResponseLanes holds (checked before the launch)
+constexpr int max_pack_hist = 128;
 
 /**
- * @brief getResponse for points ip*W .. ip*W+W-1, W = lanes of the value
+ * @brief getResponse for points ip*n_lanes .. ip*n_lanes+n_lanes-1, n_lanes = lanes of the value
  * type R: one point for R = double (the scalar CPU path and one GPU thread
- * per point), W points in lockstep for a pack (the CPU SIMD path).
+ * per point), n_lanes points in lockstep for a pack (the CPU SIMD path).
  *
  * The steps are those of the original getResponseSngl: per point,
  * ProblemState and preprocess (EOS, hardness update); then the Newton solve
@@ -121,150 +155,159 @@ constexpr int maxPackHist = 128;
  * gather/scatter steps compile away (`if constexpr`). A pack whose last
  * lanes run past nPassed repeats the last point on scratch copies.
  *
- * Returns the points that converged (for R = double: a bool). The caller
+ * @tparam R value type: double (one point) or a pack of points
+ * @tparam SlipGeom, Kinetics, ThermoElastN, EosModel the model's classes
+ * @param[in] ip index of the pack: points ip * n_lanes .. ip * n_lanes + n_lanes - 1
+ * @param[in] slipGeom, kinetics, elastN, eos the model
+ * @param[in,out] a the arrays of the getResponseECM call (PackArrays)
+ * @param[out] fevals_out optional, n_lanes + 1 entries: the function
+ * evaluations per lane, then the most of any lane
+ * @return the points that converged (for R = double: a bool). The caller
  * marks failures (hist[iHistA_nFEval] *= -1), as for getResponseSngl.
- * fevalsOut (optional): the evaluations per lane and the most of any lane.
  */
 template<class R, class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
 __ecmech_hdev__
 inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const Kinetics& kinetics,
                                   const ThermoElastN& elastN, const EosModel& eos, const PackArrays& a,
-                                  int* const fevalsOut = nullptr)
+                                  int* const fevals_out = nullptr)
 {
-   constexpr int W = lanes_of<R>();
-   constexpr bool one = snls::is_scalar_value<R>();
-   using PS = ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>;
-   using PSV = std::conditional_t<one, PS, ProblemStatePack<Kinetics, R>>;
-   constexpr bool dynamicGeom = SlipGeom::dynamic;
-   using GeomV = std::conditional_t<dynamicGeom && !one, SlipGeomPack<SlipGeom, R>, SlipGeom>;
-   using Prob = EvptnUpdstProblem<GeomV, Kinetics, ThermoElastN, PSV>;
+   constexpr int n_lanes = lanes_of<R>();
+   constexpr bool single_point = snls::is_scalar_value<R>();
+   // problem states: one point's (ProblemStatePoint), and the one the solve
+   // works on (ProblemStateR: the point's own for one point, else gathered lanes)
+   using ProblemStatePoint = ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>;
+   using ProblemStateR = std::conditional_t<single_point, ProblemStatePoint, ProblemStatePack<Kinetics, R>>;
+   constexpr bool dynamic_geom = SlipGeom::dynamic;
+   // the slip geometry the solve works on: lanes gathered for a dynamic geometry
+   using SlipGeomR = std::conditional_t<dynamic_geom && !single_point, SlipGeomPack<SlipGeom, R>, SlipGeom>;
+   using Prob = EvptnUpdstProblem<SlipGeomR, Kinetics, ThermoElastN, ProblemStateR>;
    using Solver = snls::SNLSTrDlDenseG<Prob, Prob::nDimSys, R>;
-   constexpr bool hardeningOnPacks = !one && has_pack_hardening<Kinetics, R>::value;
+   constexpr bool hardening_on_packs = !single_point && has_pack_hardening<Kinetics, R>::value;
    constexpr int nH = Kinetics::nH;
    constexpr int nslip = SlipGeom::nslip;
    constexpr int n = Prob::nDimSys;
-   constexpr int WP = one ? 1 : W; // scratch for padding lanes (none for one point)
+   constexpr int n_pad_lanes = single_point ? 1 : n_lanes; // scratch for padding lanes (none for one point)
    const double dt = a.dt;
 
    // point index per lane; lanes past the end repeat the last point on copies
-   int idx[W];
-   bool real[W];
-   for (int l = 0; l < W; ++l) {
-      const int i = ip * W + l;
-      real[l] = one || (i < a.nPassed);
-      idx[l] = real[l] ? i : (a.nPassed - 1);
+   int point_idx[n_lanes];
+   bool is_real[n_lanes];
+   for (int l = 0; l < n_lanes; ++l) {
+      const int i = ip * n_lanes + l;
+      is_real[l] = single_point || (i < a.nPassed);
+      point_idx[l] = is_real[l] ? i : (a.nPassed - 1);
    }
-   double* histL[W]; double* stressL[W]; double* energyL[W]; double* sddL[W]; double* tL[W];
-   [[maybe_unused]] double padHist[WP][one ? 1 : maxPackHist], padStress[WP][8], padEnergy[WP][8], padSdd[WP][8], padT[WP];
-   alignas(PS) unsigned char psMem[W][sizeof(PS)];
-   PS* ps[W];
-   alignas(SlipGeom) unsigned char geomMem[(dynamicGeom && !one) ? W : 1][(dynamicGeom && !one) ? sizeof(SlipGeom) : 1];
-   const SlipGeom* geom[W];
-   bool ok[W];
-   double halfVMidDt[W], devE[W];
+   double* hist_l[n_lanes]; double* stress_l[n_lanes]; double* energy_l[n_lanes]; double* sdd_l[n_lanes]; double* tkelv_l[n_lanes];
+   [[maybe_unused]] double pad_hist[n_pad_lanes][single_point ? 1 : max_pack_hist], pad_stress[n_pad_lanes][8], pad_energy[n_pad_lanes][8], pad_sdd[n_pad_lanes][8], pad_tkelv[n_pad_lanes];
+   alignas(ProblemStatePoint) unsigned char point_state_mem[n_lanes][sizeof(ProblemStatePoint)];
+   ProblemStatePoint* point_states[n_lanes];
+   alignas(SlipGeom) unsigned char geom_mem[(dynamic_geom && !single_point) ? n_lanes : 1][(dynamic_geom && !single_point) ? sizeof(SlipGeom) : 1];
+   const SlipGeom* geom[n_lanes];
+   bool preprocess_ok[n_lanes];
+   double halfVMidDt[n_lanes], dev_strain_energy_total[n_lanes];
 
    // per point: problem state and preprocess
-   for (int l = 0; l < W; ++l) {
-      const int i = idx[l];
-      histL[l] = &a.histV[a.history_stride * i];
-      stressL[l] = &a.cauchy_stress_d6pV[a.stress_stride * i];
-      energyL[l] = &a.internal_energyV[a.int_eng_stride * i];
-      sddL[l] = &a.sddV[a.sdd_stride * i];
-      tL[l] = &a.tkelvV[a.tkelv_stride * i];
-      if constexpr (!one) {
-         if (!real[l]) {
-            const unsigned int nHist = a.history_stride;
-            for (unsigned int k = 0; k < nHist; ++k) { padHist[l][k] = histL[l][k]; }
-            for (int k = 0; k < 8 && k < (int)a.stress_stride; ++k) { padStress[l][k] = stressL[l][k]; }
-            for (int k = 0; k < 8 && k < (int)a.int_eng_stride; ++k) { padEnergy[l][k] = energyL[l][k]; }
-            for (int k = 0; k < 8 && k < (int)a.sdd_stride; ++k) { padSdd[l][k] = sddL[l][k]; }
-            padT[l] = *tL[l];
-            histL[l] = padHist[l]; stressL[l] = padStress[l]; energyL[l] = padEnergy[l]; sddL[l] = padSdd[l]; tL[l] = &padT[l];
+   for (int l = 0; l < n_lanes; ++l) {
+      const int i = point_idx[l];
+      hist_l[l] = &a.histV[a.history_stride * i];
+      stress_l[l] = &a.cauchy_stress_d6pV[a.stress_stride * i];
+      energy_l[l] = &a.internal_energyV[a.int_eng_stride * i];
+      sdd_l[l] = &a.sddV[a.sdd_stride * i];
+      tkelv_l[l] = &a.tkelvV[a.tkelv_stride * i];
+      if constexpr (!single_point) {
+         if (!is_real[l]) {
+            const unsigned int n_hist = a.history_stride;
+            for (unsigned int k = 0; k < n_hist; ++k) { pad_hist[l][k] = hist_l[l][k]; }
+            for (int k = 0; k < 8 && k < (int)a.stress_stride; ++k) { pad_stress[l][k] = stress_l[l][k]; }
+            for (int k = 0; k < 8 && k < (int)a.int_eng_stride; ++k) { pad_energy[l][k] = energy_l[l][k]; }
+            for (int k = 0; k < 8 && k < (int)a.sdd_stride; ++k) { pad_sdd[l][k] = sdd_l[l][k]; }
+            pad_tkelv[l] = *tkelv_l[l];
+            hist_l[l] = pad_hist[l]; stress_l[l] = pad_stress[l]; energy_l[l] = pad_energy[l]; sdd_l[l] = pad_sdd[l]; tkelv_l[l] = &pad_tkelv[l];
          }
       }
-      ps[l] = new (psMem[l]) PS(histL[l], stressL[l], *tL[l], &a.def_rate_d6vV[a.def_rate_stride * i],
+      point_states[l] = new (point_state_mem[l]) ProblemStatePoint(hist_l[l], stress_l[l], *tkelv_l[l], &a.def_rate_d6vV[a.def_rate_stride * i],
                                 &a.spin_vecV[a.spin_v_stride * i], &a.rel_vol_ratiosV[a.vol_ratio_stride * i], dt);
       // dynamic slip geometries: a copy per lane of a pack; one point uses the
       // caller's geometry, as getResponseSngl always did
-      if constexpr (dynamicGeom && !one) { geom[l] = new (geomMem[l]) SlipGeom(slipGeom); }
+      if constexpr (dynamic_geom && !single_point) { geom[l] = new (geom_mem[l]) SlipGeom(slipGeom); }
       else { geom[l] = &slipGeom; }
-      ok[l] = preprocess<SlipGeom, Kinetics, EosModel, ThermoElastN, PS, false, hardeningOnPacks>
+      preprocess_ok[l] = preprocess<SlipGeom, Kinetics, EosModel, ThermoElastN, ProblemStatePoint, false, hardening_on_packs>
                  (*geom[l], kinetics, eos, elastN, &a.rel_vol_ratiosV[a.vol_ratio_stride * i],
-                  energyL[l], &a.def_rate_d6vV[a.def_rate_stride * i], *ps[l], halfVMidDt[l], devE[l]);
+                  energy_l[l], &a.def_rate_d6vV[a.def_rate_stride * i], *point_states[l], halfVMidDt[l], dev_strain_energy_total[l]);
    }
-   int lref = 0;
-   while (lref < W - 1 && !ok[lref]) { ++lref; }
+   int l_ref = 0;
+   while (l_ref < n_lanes - 1 && !preprocess_ok[l_ref]) { ++l_ref; }
 
    mask_t<R> converged = no_lanes<R>();
-   if constexpr (one) {
-      if (!ok[0]) { ps[0]->~PS(); return converged; }
+   if constexpr (single_point) {
+      if (!preprocess_ok[0]) { point_states[0]->~ProblemStatePoint(); return converged; }
    }
 
    // hardness update on the pack (KineticsOrowanD's reduced solve)
-   if constexpr (hardeningOnPacks) {
+   if constexpr (hardening_on_packs) {
       R hs_o[nH], gdot_o[nslip], hs_u[nH];
-      for (int l = 0; l < W; ++l) {
-         const PS& p = *ps[ok[l] ? l : lref];
+      for (int l = 0; l < n_lanes; ++l) {
+         const ProblemStatePoint& p = *point_states[preprocess_ok[l] ? l : l_ref];
          for (int k = 0; k < nH; ++k) { set_lane(hs_o[k], l, p.h_state[k]); }
          for (int k = 0; k < nslip; ++k) { set_lane(gdot_o[k], l, p.gdot[k]); }
       }
-      const mask_t<R> hok = kinetics.updateHLanes(hs_u, hs_o, dt, gdot_o);
-      for (int l = 0; l < W; ++l) {
-         if (!ok[l]) { continue; }
-         if (!mask_lane(hok, l)) { ok[l] = false; continue; } // as preprocess: "Hardening failed to converge"
-         for (int k = 0; k < nH; ++k) { ps[l]->h_state_u[k] = lane(hs_u[k], l); }
+      const mask_t<R> hardening_ok = kinetics.updateHLanes(hs_u, hs_o, dt, gdot_o);
+      for (int l = 0; l < n_lanes; ++l) {
+         if (!preprocess_ok[l]) { continue; }
+         if (!mask_lane(hardening_ok, l)) { preprocess_ok[l] = false; continue; } // as preprocess: "Hardening failed to converge"
+         for (int k = 0; k < nH; ++k) { point_states[l]->h_state_u[k] = lane(hs_u[k], l); }
       }
    }
 
    // the problem state of the pack: a point's own state, or the lanes gathered
    // (failed points ride along on a valid point's data)
-   mask_t<R> active0 = all_lanes<R>();
-   [[maybe_unused]] ProblemStatePack<Kinetics, R> pvMem;
-   PSV* pv = nullptr;
-   if constexpr (one) { pv = ps[0]; }
+   mask_t<R> active = all_lanes<R>();
+   [[maybe_unused]] ProblemStatePack<Kinetics, R> state_pack;
+   ProblemStateR* problem_state = nullptr;
+   if constexpr (single_point) { problem_state = point_states[0]; }
    else {
-      pv = &pvMem;
-      pv->dt = dt;
-      for (int l = 0; l < W; ++l) {
-         if (!ok[l]) { set_mask_lane(active0, l, false); }
-         const PS& p = *ps[ok[l] ? l : lref];
-         set_lane(pv->rel_vol_new, l, p.rel_vol_new);
-         set_lane(pv->energy_new, l, p.energy_new);
-         set_lane(pv->pressure_EOS, l, p.pressure_EOS);
-         set_lane(pv->tkelv, l, p.tkelv);
-         for (int k = 0; k < ecmech::ntvec; ++k) { set_lane(pv->elast_d5_n[k], l, p.elast_d5_n[k]); set_lane(pv->def_rate_d5_sample[k], l, p.def_rate_d5_sample[k]); }
-         for (int k = 0; k < ecmech::qdim; ++k) { set_lane(pv->quat_n[k], l, p.quat_n[k]); }
-         for (int k = 0; k < ecmech::nwvec; ++k) { set_lane(pv->spin_vec_sample[k], l, p.spin_vec_sample[k]); }
-         for (int k = 0; k < nH; ++k) { set_lane(pv->h_state_u[k], l, p.h_state_u[k]); }
+      problem_state = &state_pack;
+      problem_state->dt = dt;
+      for (int l = 0; l < n_lanes; ++l) {
+         if (!preprocess_ok[l]) { set_mask_lane(active, l, false); }
+         const ProblemStatePoint& p = *point_states[preprocess_ok[l] ? l : l_ref];
+         set_lane(problem_state->rel_vol_new, l, p.rel_vol_new);
+         set_lane(problem_state->energy_new, l, p.energy_new);
+         set_lane(problem_state->pressure_EOS, l, p.pressure_EOS);
+         set_lane(problem_state->tkelv, l, p.tkelv);
+         for (int k = 0; k < ecmech::ntvec; ++k) { set_lane(problem_state->elast_d5_n[k], l, p.elast_d5_n[k]); set_lane(problem_state->def_rate_d5_sample[k], l, p.def_rate_d5_sample[k]); }
+         for (int k = 0; k < ecmech::qdim; ++k) { set_lane(problem_state->quat_n[k], l, p.quat_n[k]); }
+         for (int k = 0; k < ecmech::nwvec; ++k) { set_lane(problem_state->spin_vec_sample[k], l, p.spin_vec_sample[k]); }
+         for (int k = 0; k < nH; ++k) { set_lane(problem_state->h_state_u[k], l, p.h_state_u[k]); }
       }
    }
 
    // the slip geometry of the pack
-   const GeomV* geomV = nullptr;
-   [[maybe_unused]] SlipGeomPack<SlipGeom, R> geomPack;
-   if constexpr (dynamicGeom && !one) {
-      for (int l = 0; l < W; ++l) { geomPack.setLane(l, *geom[ok[l] ? l : lref]); }
-      geomV = &geomPack;
+   const SlipGeomR* slip_geom_r = nullptr;
+   [[maybe_unused]] SlipGeomPack<SlipGeom, R> slip_geom_pack;
+   if constexpr (dynamic_geom && !single_point) {
+      for (int l = 0; l < n_lanes; ++l) { slip_geom_pack.gather_lane(l, *geom[preprocess_ok[l] ? l : l_ref]); }
+      slip_geom_r = &slip_geom_pack;
    }
-   else { geomV = geom[0]; }
+   else { slip_geom_r = geom[0]; }
 
    // the Newton solve (main_problem's settings)
    snls::TrDeltaControl deltaControl;
    deltaControl._deltaInit = 1e0;
-   Prob prob(*geomV, kinetics, elastN, *pv);
+   Prob prob(*slip_geom_r, kinetics, elastN, *problem_state);
    Solver solver(prob);
    solver.setupSolver(200, a.tolerance, &deltaControl);
    for (int k = 0; k < n; ++k) { solver._x[k] = 0.0; }
-   solver.solve(active0);
+   solver.solve(active);
    converged = solver.getConverged();
-   if (fevalsOut) {
-      int mx = 0;
-      for (int l = 0; l < W; ++l) {
-         const int f = (real[l] && ok[l]) ? solver.getNFEvals(l) : 0;
-         fevalsOut[l] = f;
-         mx = (f > mx) ? f : mx;
+   if (fevals_out) {
+      int max_fevals = 0;
+      for (int l = 0; l < n_lanes; ++l) {
+         const int f = (is_real[l] && preprocess_ok[l]) ? solver.getNFEvals(l) : 0;
+         fevals_out[l] = f;
+         max_fevals = (f > max_fevals) ? f : max_fevals;
       }
-      fevalsOut[W] = mx;
+      fevals_out[n_lanes] = max_fevals;
    }
 
    // tangent (computeTangentStiffness's evaluation), state update and the
@@ -283,18 +326,18 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    prob.get_slip_contribution(pl_disipation_rate, effective_shear_rate, gdot, elast_d5_u);
    R cauchy_xtal[ecmech::nsvec];
    prob.elastNEtoC(cauchy_xtal, elast_d5_u);
-   const R hdnScale = prob.getHdnScale();
+   const R hdn_scale = prob.getHdnScale();
 
    // per point: computeTangentStiffness's scaling, postprocess_prob's
    // bookkeeping, postprocess
-   for (int l = 0; l < W; ++l) {
-      if (!real[l] || !ok[l] || !mask_lane(converged, l)) {
-         if (real[l] && ok[l]) { set_mask_lane(converged, l, false); }
-         ps[l]->~PS();
+   for (int l = 0; l < n_lanes; ++l) {
+      if (!is_real[l] || !preprocess_ok[l] || !mask_lane(converged, l)) {
+         if (is_real[l] && preprocess_ok[l]) { set_mask_lane(converged, l, false); }
+         point_states[l]->~ProblemStatePoint();
          continue;
       }
-      const int i = idx[l];
-      PS& p = *ps[l];
+      const int i = point_idx[l];
+      ProblemStatePoint& p = *point_states[l];
       if (a.mtanSDV) {
          double m6[ecmech::nsvec2];
          for (int k = 0; k < ecmech::nsvec2; ++k) { m6[k] = lane(mtan_vecds[k], l) * prob.getDtRi(); }
@@ -303,31 +346,111 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
       }
       for (int k = 0; k < ecmech::ntvec; ++k) { p.elast_d5_u[k] = lane(elast_d5_u[k], l); }
       for (int k = 0; k < ecmech::qdim; ++k) { p.quat_u[k] = lane(quat_u[k], l); }
-      histL[l][iHistA_nFEval] = solver.getNFEvals(l) + (a.mtanSDV ? 1 : 0);
+      hist_l[l][iHistA_nFEval] = solver.getNFEvals(l) + (a.mtanSDV ? 1 : 0);
       for (int k = 0; k < nH; ++k) { p.h_state[k] = p.h_state_u[k]; }
       for (int k = 0; k < nslip; ++k) { p.gdot[k] = lane(gdot[k], l); }
       p.eps_dot = lane(effective_shear_rate, l);
       p.eps += p.eps_dot * p.dt;
       {
          const double dEff = vecd_Deff(p.def_rate_d5_sample);
-         double flow_strength = lane(hdnScale, l);
+         double flow_strength = lane(hdn_scale, l);
          if (dEff > idp_tiny_sqrt) { flow_strength = lane(pl_disipation_rate, l) / dEff; }
          p.flow_strength = flow_strength;
       }
       double cauchy_stress_d5p_xtal[ecmech::nsvec];
       for (int k = 0; k < ecmech::nsvec; ++k) { cauchy_stress_d5p_xtal[k] = lane(cauchy_xtal[k], l); }
-      postprocess(p, elastN, &a.def_rate_d6vV[a.def_rate_stride * i], sddL[l], energyL[l],
-                  cauchy_stress_d5p_xtal, devE[l], halfVMidDt[l]);
-      p.~PS();
+      postprocess(p, elastN, &a.def_rate_d6vV[a.def_rate_stride * i], sdd_l[l], energy_l[l],
+                  cauchy_stress_d5p_xtal, dev_strain_energy_total[l], halfVMidDt[l]);
+      p.~ProblemStatePoint();
    }
-   if constexpr (dynamicGeom && !one) { for (int l = 0; l < W; ++l) { geom[l]->~SlipGeom(); } }
+   if constexpr (dynamic_geom && !single_point) { for (int l = 0; l < n_lanes; ++l) { geom[l]->~SlipGeom(); } }
    return converged;
 }
 
 /**
- * @brief Complete time step for one material point (see the documentation
- * above the declaration in ECMech_evptnSngl.h): getResponseLanes with
- * R = double on this point's arrays.
+ * @brief Complete time step integration for single material point (main interface).
+ * 
+ * This is the primary entry point for crystal plasticity integration. It orchestrates
+ * the complete sequence: preprocessing → nonlinear solve → post-processing.
+ * 
+ * **Function signature summary**:
+ * - Input: Beginning-of-step state, prescribed kinematics, material models, time step
+ * - Output: End-of-step stress, updated history variables, optional tangent
+ * - Return: Success/failure flag
+ * 
+ * **Integration sequence**:
+ * ```
+ * 1. Create ProblemState from input arrays
+ * 2. preprocess(): EOS, hardening, energy initialization
+ * 3. Create EvptnUpdstProblem for coupled elastic-rotation solve
+ * 4. Create SNLS solver and configure
+ * 5. main_problem(): Solve nonlinear system
+ * 6. If tangent requested: computeTangentStiffness()
+ * 7. stateFromX(): Extract converged elastic strain and orientation
+ * 8. Store number of function evaluations in history
+ * 9. postprocess_prob(): Compute plastic work, flow strength
+ * 10. postprocess(): Rotate stress, finalize energy
+ * ```
+ * 
+ * **Template parameters**:
+ * @tparam SlipGeom Slip geometry class (e.g., SlipGeomFCC, SlipGeomBCC)
+ * @tparam Kinetics Kinetics class (e.g., KineticsKMBalD, KineticsVocePL)
+ * @tparam ThermoElastN Thermoelastic class (e.g., ThermoElastNCubic)
+ * @tparam EosModel Equation of state class (e.g., EosModelConst)
+ * 
+ * @param[in] slipGeom Slip geometry object defining slip systems
+ * @param[in] kinetics Kinetics object for rate-dependent strength
+ * @param[in] elastN Thermoelastic object for stress-strain relation
+ * @param[in] eos Equation of state object for pressure-volume-energy
+ * @param[in] dt Time step size [time units]
+ * @param[in] tolerance Convergence tolerance for nonlinear solver [dimensionless]
+ * @param[in] def_rate_d6v_sample Prescribed deformation rate [1/time, nsvp = 7 components]
+ *                                 Only first ntvec = 5 used (deviatoric)
+ * @param[in] spin_vec_sample Prescribed spin [1/time, ndim = 3 components]
+ * @param[in] rel_vol_ratios Volume ratio array [nvr = 4 components]:
+ *                           [0] = J_n, [1] = J_{n+1}, [2] = (J_{n+1}-J_n)/dt, [3] = J_{n+1}-J_n
+ * @param[in,out] internal_energy Internal energy [energy/volume, ne = 1 component]
+ *                                 Updated with plastic work contribution
+ * @param[in,out] cauchy_stress_d6p Cauchy stress [stress units, nsvp = 7 components]
+ *                                   Input: σ_n, Output: σ_{n+1}
+ *                                   Layout: [σ11, σ22, σ33, σ23, σ13, σ12, -p]
+ * @param[in,out] hist History variable array [numHist components]
+ *                     Contains and updates: orientation, elastic strain, hardening, etc.
+ * @param[in,out] tkelv Temperature [Kelvin]
+ *                      May be updated by EOS evaluation
+ * @param[out] sdd Auxiliary outputs [nsdd = 2 components]:
+ *                 [0] = bulk modulus, [1] = shear modulus
+ * @param[out] mtanSD Material tangent stiffness [nsvec2 = 36 components or nullptr]
+ *                    If nullptr: Skip tangent computation
+ *                    If non-null: Compute and store ∂σ/∂Δε
+ * @param[in] outputLevel Diagnostic output verbosity (0 = silent)
+ * 
+ * @return true if integration successful, false if solver failed to converge
+ * 
+ * **History array layout**:
+ * Defined by case-specific indices (iHistLbQ, iHistLbGdot, etc.):
+ * - Orientation quaternion [4 components]
+ * - Slip rates [nslip components]
+ * - Elastic deviatoric strain [ntvec = 5 components]
+ * - Hardening state [nH components]
+ * - Equivalent plastic strain [1 component]
+ * - Equivalent plastic strain rate [1 component]
+ * - Flow strength [1 component]
+ * - Number of function evaluations [1 component]
+ * 
+ * **Convergence failure**:
+ * - Returns false immediately if preprocessing fails (hardening divergence)
+ * - Returns false if main nonlinear solve fails to converge
+ * - Host code should handle failure (reduce time step, flag element, etc.)
+ * 
+ * @note Thread-safe: No static storage, can be called in parallel for different points
+ * @note GPU-compatible: All functions marked __ecmech_hdev__
+ * @note Const correctness: Material models passed by const reference
+ * 
+ * @see getResponseECM() in ECMech_evptnWrap.h for vectorized batch interface
+ * @see ProblemState constructor for history array interpretation
+ *
+ * Implemented as getResponseLanes with R = double on this point's arrays.
  */
 template<class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
 __ecmech_hdev__
