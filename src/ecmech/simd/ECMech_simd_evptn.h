@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <type_traits>
 #include <vector>
+#include "RAJA/RAJA.hpp"
 #if defined(ECMECH_SIMD_EXPT)
 #include "simd/ECMech_simd_pack.h"
 #endif
@@ -68,8 +69,9 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
    static const bool stats_on = std::getenv("ECMECH_SIMD_STATS") != nullptr;
    static long stat_useful = 0, stat_issued = 0, stat_calls = 0;
 
-   #pragma omp parallel for schedule(static) if (use_openmp)
-   for (int ip = 0; ip < n_packs; ++ip) {
+   long* const stat_useful_ptr = &stat_useful;
+   long* const stat_issued_ptr = &stat_issued;
+   auto pack_body = [&] (int ip) {
       int fevals[n_lanes + 1];
       const auto converged = evptn::getResponseLanes<PackDouble>(ip, slipGeom, kinetics, elastN, eos, a, stats_on ? fevals : nullptr);
       for (int l = 0; l < n_lanes; ++l) {
@@ -79,12 +81,18 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
       if (stats_on) {
          long sum = 0;
          for (int l = 0; l < n_lanes; ++l) { sum += fevals[l]; }
-         #pragma omp atomic
-         stat_useful += sum;
-         #pragma omp atomic
-         stat_issued += long(fevals[n_lanes]) * n_lanes;
+         RAJA::atomicAdd<RAJA::auto_atomic>(stat_useful_ptr, sum);
+         RAJA::atomicAdd<RAJA::auto_atomic>(stat_issued_ptr, long(fevals[n_lanes]) * n_lanes);
       }
-   }
+   };
+   // the packs in parallel through RAJA (no OpenMP in this file: builds without
+   // OpenMP, e.g. Apple clang, run the sequential loop)
+   const RAJA::RangeSegment packs(0, n_packs);
+#if defined(RAJA_ENABLE_OPENMP) && defined(OPENMP_ENABLE)
+   if (use_openmp) { RAJA::forall<RAJA::omp_parallel_for_exec>(packs, pack_body); }
+   else
+#endif
+   { (void) use_openmp; RAJA::forall<RAJA::seq_exec>(packs, pack_body); }
    if (stats_on && (++stat_calls % 60 == 0)) {
       std::printf("SIMDSTATS lanes %d main-solve lane utilization %.3f (useful %ld / issued %ld)\n",
                   n_lanes, double(stat_useful) / double(stat_issued), stat_useful, stat_issued);
