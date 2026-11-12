@@ -729,7 +729,11 @@ namespace ecmech {
                         tkelvV[tkelv_stride * i],
                         &sddV[sdd_stride * i],
                         mtanSDThis,
-                        outputLevel);
+                        outputLevel
+#if defined(ECMECH_DIAG_TRACE)
+                        , (i == ECMECH_DIAG_TRACE) ? 1 : 0   // diagnostic: trace this point
+#endif
+                        );
                   };
                   bool status;
                   // Thanks to NVCC being difficult we have to create an unnecessary temp variable just so we can use our
@@ -827,7 +831,11 @@ namespace ecmech {
                          &def_rate_d6vV[def_rate_stride * i], &spin_vecV[spin_v_stride * i],
                          &rel_vol_ratiosV[vol_ratio_stride * i], &internal_energyV[int_eng_stride * i],
                          &cauchy_stress_d6pV[stress_stride * i], &histV[history_stride * i],
-                         tkelvV[tkelv_stride * i], &sddV[sdd_stride * i], mtanSDThis, outputLevel);
+                         tkelvV[tkelv_stride * i], &sddV[sdd_stride * i], mtanSDThis, outputLevel
+#if defined(ECMECH_DIAG_TRACE)
+                         , (i == ECMECH_DIAG_TRACE) ? 1 : 0   // diagnostic: trace this point
+#endif
+                         );
                      };
                      bool status;
                      if constexpr (SlipGeom::dynamic) {

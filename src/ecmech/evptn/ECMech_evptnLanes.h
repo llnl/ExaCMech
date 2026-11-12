@@ -6,6 +6,9 @@
  */
 
 #include <new>
+#if defined(ECMECH_DIAG_TRACE)
+#include <cstdio>
+#endif
 #include <type_traits>
 #include "SNLS_TrDLDenseG.h"
 
@@ -137,7 +140,61 @@ struct PackArrays {
    double* sddV;                  unsigned int sdd_stride;        ///< sdd output
    double* mtanSDV;                                               ///< tangent stiffness (nsvec2 per point), or nullptr
    int nPassed;                                                   ///< number of points
+   int trace = 0;                                                 ///< ECMECH_DIAG_TRACE builds: print this point's trace (one point only)
 };
+
+#if defined(ECMECH_DIAG_TRACE)
+/**
+ * @brief Diagnostic (ECMECH_DIAG_TRACE=<point index>): print n values, one per
+ * line, as "TRACE <tag> <index> <k> <value>", so that a GPU trace and a CPU
+ * trace of the same point can be compared line by line.
+ */
+__ecmech_hdev__ inline void trace_values(const char* tag, int index, const double* v, int n)
+{
+   for (int k = 0; k < n; ++k) { printf("TRACE %s %d %d %.17g\n", tag, index, k, v[k]); }
+}
+
+/**
+ * @brief Diagnostic (ECMECH_DIAG_TRACE): the problem with every residual
+ * evaluation of the solver printed (x, then the residual, then the status).
+ * @tparam Prob the problem (EvptnUpdstProblem for one point)
+ */
+template<class Prob>
+struct TracedProblem : public Prob {
+   using Prob::Prob;
+   int m_trace = 0; ///< print the evaluations
+   int m_eval = 0;  ///< evaluations so far
+   __ecmech_hdev__ bool computeRJ(double* const resid, double* const jacobian, const double* const x) {
+      const bool ok = Prob::computeRJ(resid, jacobian, x);
+      if (m_trace) {
+         trace_values("rj_x", m_eval, x, Prob::nDimSys);
+         trace_values("rj_r", m_eval, resid, Prob::nDimSys);
+         printf("TRACE rj_ok %d 0 %d\n", m_eval, int(ok));
+         ++m_eval;
+      }
+      return ok;
+   }
+};
+
+/**
+ * @brief Diagnostic (ECMECH_DIAG_TRACE): print one point's state after
+ * preprocess: hardness (start and end of step), slip rates, elastic strain,
+ * orientation, EOS values and the slip geometry's P.
+ */
+template<class ProblemStatePoint, class SlipGeom>
+__ecmech_hdev__ inline void trace_preprocess(const ProblemStatePoint& p, const SlipGeom& geom, bool ok, int n_h, int n_slip)
+{
+   printf("TRACE pre_ok 0 0 %d\n", int(ok));
+   trace_values("h_state", 0, p.h_state, n_h);
+   trace_values("h_state_u", 0, p.h_state_u, n_h);
+   trace_values("gdot_n", 0, p.gdot, n_slip);
+   trace_values("elast_d5_n", 0, p.elast_d5_n, ecmech::ntvec);
+   trace_values("quat_n", 0, p.quat_n, ecmech::qdim);
+   const double eos[4] = {p.pressure_EOS, p.energy_new, p.bulk_modulus_new, p.tkelv};
+   trace_values("eos", 0, eos, 4);
+   trace_values("geom_P", 0, geom.getP(), ecmech::ntvec * n_slip);
+}
+#endif
 /// Longest history the padding scratch of getResponseLanes holds (checked before the launch)
 constexpr int max_pack_hist = 128;
 
@@ -232,7 +289,12 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    constexpr bool dynamic_geom = SlipGeom::dynamic;
    // the slip geometry the solve works on: lanes gathered for a dynamic geometry
    using SlipGeomR = std::conditional_t<dynamic_geom && !single_point, SlipGeomPack<SlipGeom, R>, SlipGeom>;
-   using Prob = EvptnUpdstProblem<SlipGeomR, Kinetics, ThermoElastN, ProblemStateR>;
+   using ProbBase = EvptnUpdstProblem<SlipGeomR, Kinetics, ThermoElastN, ProblemStateR>;
+#if defined(ECMECH_DIAG_TRACE)
+   using Prob = std::conditional_t<single_point, TracedProblem<ProbBase>, ProbBase>;
+#else
+   using Prob = ProbBase;
+#endif
    using Solver = snls::SNLSTrDlDenseG<Prob, Prob::nDimSys, R>;
    constexpr bool hardening_on_packs = !single_point && has_pack_hardening<Kinetics, R>::value;
    constexpr int nH = Kinetics::nH;
@@ -240,6 +302,13 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    constexpr int n = Prob::nDimSys;
    constexpr int n_pad_lanes = single_point ? 1 : n_lanes; // scratch for padding lanes (none for one point)
    const double dt = a.dt;
+#if defined(ECMECH_LANES_GEOM_COPY)
+   // trial: the solve works on this function's own copy of the slip geometry
+   const SlipGeom geom_copy = slipGeom;
+   const SlipGeom& slip_geom_in = geom_copy;
+#else
+   const SlipGeom& slip_geom_in = slipGeom;
+#endif
 
    // point index per lane; lanes past the end repeat the last point on copies
    int point_idx[n_lanes];
@@ -290,8 +359,8 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
       }
       // dynamic slip geometries: a copy per lane of a pack; one point uses the
       // caller's geometry, as getResponseSngl always did
-      if constexpr (dynamic_geom && !single_point) { geom[l] = new (geom_mem[l]) SlipGeom(slipGeom); }
-      else { geom[l] = &slipGeom; }
+      if constexpr (dynamic_geom && !single_point) { geom[l] = new (geom_mem[l]) SlipGeom(slip_geom_in); }
+      else { geom[l] = &slip_geom_in; }
       preprocess_ok[l] = preprocess<SlipGeom, Kinetics, EosModel, ThermoElastN, ProblemStatePoint, false, hardening_on_packs>
                  (*geom[l], kinetics, eos, elastN, &a.rel_vol_ratiosV[a.vol_ratio_stride * i],
                   energy_l[l], &a.def_rate_d6vV[a.def_rate_stride * i], *point_states[l], halfVMidDt[l], dev_strain_energy_total[l]);
@@ -300,6 +369,11 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    while (l_ref < n_lanes - 1 && !preprocess_ok[l_ref]) { ++l_ref; }
 
    mask_t<R> converged = no_lanes<R>();
+#if defined(ECMECH_DIAG_TRACE)
+   if constexpr (single_point) {
+      if (a.trace) { trace_preprocess(*point_states[0], *geom[0], preprocess_ok[0], nH, nslip); }
+   }
+#endif
    if constexpr (single_point) {
       // failed: nFEval >= 1 so that the caller's failure mark (nFEval *= -1)
       // makes it negative (with nFEval still 0, at the first step, it would not)
@@ -358,11 +432,44 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    snls::TrDeltaControl deltaControl;
    deltaControl._deltaInit = 1e0;
    Prob prob(*slip_geom_r, kinetics, elastN, *problem_state);
+#if defined(ECMECH_DIAG_TRACE)
+   if constexpr (single_point) { prob.m_trace = a.trace; }
+#endif
    Solver solver(prob);
-   solver.setupSolver(200, a.tolerance, &deltaControl);
-   for (int k = 0; k < n; ++k) { solver._x[k] = 0.0; }
-   solver.solve(active);
-   converged = solver.getConverged();
+#if defined(ECMECH_LANES_MAIN_PROBLEM)
+   // trial: one point solved by main_problem, as the original getResponseSngl
+   if constexpr (single_point) { (void) deltaControl; (void) active; converged = main_problem(a.tolerance, solver, 0); }
+   else
+#endif
+   {
+      solver.setupSolver(200, a.tolerance, &deltaControl);
+      for (int k = 0; k < n; ++k) { solver._x[k] = 0.0; }
+      solver.solve(active);
+      converged = solver.getConverged();
+   }
+#if defined(ECMECH_DIAG_TRACE)
+   if constexpr (single_point) {
+      if (a.trace) {
+         printf("TRACE solve 0 0 status %d converged %d fevals %d iters %d res %.17g\n", int(solver.getStatus()), int(converged),
+                solver.getNFEvals(), solver.getNIters(), solver.getRes());
+      }
+   }
+#endif
+#if defined(ECMECH_LANES_CLASSIC_TAIL)
+   // trial: one point finished as the original getResponseSngl does
+   // (computeTangentStiffness, stateFromX, postprocess_prob, postprocess)
+   if constexpr (single_point) {
+      if (!converged) { const int f = solver.getNFEvals(); hist_l[0][iHistA_nFEval] = (f > 0) ? f : 1; return converged; }
+      ProblemStatePoint& p = *point_states[0];
+      double cauchy_stress_d5p_xtal[ecmech::nsvec];
+      if (a.mtanSDV) { computeTangentStiffness(prob, solver, p, a.mtanSDV); }
+      prob.stateFromX(p.elast_d5_u, p.quat_u, solver._x);
+      hist_l[0][iHistA_nFEval] = solver.getNFEvals();
+      postprocess_prob<Kinetics::nH>(prob, p, cauchy_stress_d5p_xtal);
+      postprocess(p, elastN, a.def_rate_d6vV, sdd_l[0], energy_l[0], cauchy_stress_d5p_xtal, dev_strain_energy_total[0], halfVMidDt[0]);
+      return converged;
+   }
+#endif
    if (fevals_out) {
       int max_fevals = 0;
       for (int l = 0; l < n_lanes; ++l) {
@@ -521,6 +628,66 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
  *
  * Implemented as getResponseLanes with R = double on this point's arrays.
  */
+/**
+ * @brief The original getResponseSngl body for one point (local ProblemState,
+ * preprocess, main_problem, computeTangentStiffness, stateFromX,
+ * postprocess_prob, postprocess), on the current problem and solver classes.
+ * Used by getResponseSngl with ECMECH_SNGL_CLASSIC (host and device) or
+ * ECMECH_SNGL_CLASSIC_DEVICE (device passes only); see getResponseSngl for the
+ * parameters. trace: print this point's trace (ECMECH_DIAG_TRACE builds).
+ */
+template<class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
+__ecmech_hdev__
+inline
+bool getResponsePointClassic(const SlipGeom& slipGeom, const Kinetics& kinetics, const ThermoElastN& elastN,
+                             const EosModel& eos, const double dt, const double tolerance,
+                             const double* const def_rate_d6v_sample, const double* const spin_vec_sample,
+                             const double* const rel_vol_ratios, double* const internal_energy,
+                             double* const cauchy_stress_d6p, double* const hist, double& tkelv,
+                             double* const sdd, double* const mtanSD, [[maybe_unused]] int trace)
+{
+   using ProblemStatePoint = ProblemState<SlipGeom, Kinetics, ThermoElastN, EosModel>;
+   ProblemStatePoint prob_state(hist, cauchy_stress_d6p, tkelv, def_rate_d6v_sample, spin_vec_sample, rel_vol_ratios, dt);
+
+   double halfVMidDt, dev_strain_energy_total;
+   const bool pre_status = preprocess(slipGeom, kinetics, eos, elastN, rel_vol_ratios, internal_energy, def_rate_d6v_sample,
+                                      prob_state, halfVMidDt, dev_strain_energy_total);
+#if defined(ECMECH_DIAG_TRACE)
+   if (trace) { trace_preprocess(prob_state, slipGeom, pre_status, Kinetics::nH, SlipGeom::nslip); }
+#endif
+   // failed: nFEval >= 1 so that the caller's failure mark (nFEval *= -1) makes it negative
+   if (!pre_status) { hist[iHistA_nFEval] = 1; return false; }
+
+   double cauchy_stress_d5p_xtal[ecmech::nsvec];
+   {
+      using ProbBase = EvptnUpdstProblem<SlipGeom, Kinetics, ThermoElastN, ProblemStatePoint>;
+#if defined(ECMECH_DIAG_TRACE)
+      using Prob = TracedProblem<ProbBase>;
+#else
+      using Prob = ProbBase;
+#endif
+      Prob prob(slipGeom, kinetics, elastN, prob_state);
+#if defined(ECMECH_DIAG_TRACE)
+      prob.m_trace = trace;
+#endif
+      snls::SNLSTrDlDenseG<Prob, Prob::nDimSys, double> solver(prob);
+      const bool status = main_problem(tolerance, solver, 0);
+#if defined(ECMECH_DIAG_TRACE)
+      if (trace) {
+         printf("TRACE solve 0 0 status %d converged %d fevals %d iters %d res %.17g\n", int(solver.getStatus()), int(status),
+                solver.getNFEvals(), solver.getNIters(), solver.getRes());
+      }
+#endif
+      if (!status) { const int f = solver.getNFEvals(); hist[iHistA_nFEval] = (f > 0) ? f : 1; return false; }
+      if (mtanSD != nullptr) { computeTangentStiffness(prob, solver, prob_state, mtanSD); }
+      prob.stateFromX(prob_state.elast_d5_u, prob_state.quat_u, solver._x);
+      hist[iHistA_nFEval] = solver.getNFEvals();
+      postprocess_prob<Kinetics::nH>(prob, prob_state, cauchy_stress_d5p_xtal);
+   }
+   postprocess(prob_state, elastN, def_rate_d6v_sample, sdd, internal_energy, cauchy_stress_d5p_xtal, dev_strain_energy_total, halfVMidDt);
+   return true;
+}
+
 template<class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
 __ecmech_hdev__
 inline
@@ -539,11 +706,19 @@ bool getResponseSngl(const SlipGeom& slipGeom,
                      double& tkelv,
                      double* const sdd,
                      double* const mtanSD,
-                     int = 0)
+                     int = 0,
+                     int trace = 0)
 {
+#if defined(ECMECH_SNGL_CLASSIC) || \
+    (defined(ECMECH_SNGL_CLASSIC_DEVICE) && (defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)))
+   // trial: the original body (ECMECH_SNGL_CLASSIC everywhere, ECMECH_SNGL_CLASSIC_DEVICE on the GPU only)
+   return getResponsePointClassic(slipGeom, kinetics, elastN, eos, dt, tolerance, def_rate_d6v_sample, spin_vec_sample,
+                                  rel_vol_ratios, internal_energy, cauchy_stress_d6p, hist, tkelv, sdd, mtanSD, trace);
+#else
    const PackArrays a{dt, tolerance, def_rate_d6v_sample, 0, spin_vec_sample, 0, rel_vol_ratios, 0,
-                      internal_energy, 0, cauchy_stress_d6p, 0, hist, 0, &tkelv, 0, sdd, 0, mtanSD, 1};
+                      internal_energy, 0, cauchy_stress_d6p, 0, hist, 0, &tkelv, 0, sdd, 0, mtanSD, 1, trace};
    return getResponseLanes<double>(0, slipGeom, kinetics, elastN, eos, a);
+#endif
 }
 
 } // namespace evptn
