@@ -82,6 +82,20 @@ int main(int argc, char *argv[]){
       size_t v = 0; cudaDeviceGetLimit(&v, cudaLimitMallocHeapSize);
       std::cout << "cudaLimitMallocHeapSize = " << v << std::endl;
    }
+#elif defined(RAJA_ENABLE_HIP)
+   // Separate names from the CUDA ones: the benchmark scripts set ECMECH_CUDA_STACK by
+   // default, and on AMD a larger stack limit also enlarges the scratch allocation, so
+   // the HIP limits stay at the runtime defaults unless asked for.
+   if (const char* st = std::getenv("ECMECH_HIP_STACK")) {
+      (void) hipDeviceSetLimit(hipLimitStackSize, std::strtoull(st, nullptr, 10));
+      size_t v = 0; (void) hipDeviceGetLimit(&v, hipLimitStackSize);
+      std::cout << "hipLimitStackSize = " << v << std::endl;
+   }
+   if (const char* heap_env = std::getenv("ECMECH_HIP_HEAP")) {
+      (void) hipDeviceSetLimit(hipLimitMallocHeapSize, std::strtoull(heap_env, nullptr, 10));
+      size_t v = 0; (void) hipDeviceGetLimit(&v, hipLimitMallocHeapSize);
+      std::cout << "hipLimitMallocHeapSize = " << v << std::endl;
+   }
 #endif
 
    int nqpts = 0;
