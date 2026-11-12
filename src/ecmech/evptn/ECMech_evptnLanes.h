@@ -142,6 +142,58 @@ struct PackArrays {
 constexpr int max_pack_hist = 128;
 
 /**
+ * @brief The per-point problem states of getResponseLanes.
+ *
+ * ProblemState has reference members, so it has no default constructor. For
+ * one point (the GPU and the scalar CPU path) the state is an ordinary member,
+ * constructed directly from the point's arrays: no placement new on the GPU.
+ * For a pack (CPU only) the states are built per lane in raw storage (see the
+ * specialization below).
+ *
+ * @tparam ProblemStatePoint one point's evptn::ProblemState
+ * @tparam single_point one point (true) or a pack (false)
+ * @tparam n_lanes lanes of the pack
+ */
+template<class ProblemStatePoint, bool single_point, int n_lanes>
+struct PointStates {
+   ProblemStatePoint state; ///< the point's state
+   /// Construct the point's state (the ProblemState constructor's arguments)
+   template<class... Args>
+   __ecmech_hdev__ explicit PointStates(Args&&... args) : state(args...) {}
+   /// The state of lane l (one point: l = 0)
+   __ecmech_hdev__ ProblemStatePoint* operator[](int) { return &state; }
+};
+
+/// Pack specialization (CPU only): raw storage per lane, constructed by
+/// construct() in the gather loop and destroyed by destroy() after the scatter.
+template<class ProblemStatePoint, int n_lanes>
+struct PointStates<ProblemStatePoint, false, n_lanes> {
+   alignas(ProblemStatePoint) unsigned char mem[n_lanes][sizeof(ProblemStatePoint)];
+   ProblemStatePoint* states[n_lanes];
+   PointStates() = default;
+   /// Construct lane l's state in place (the ProblemState constructor's arguments)
+   template<class... Args>
+   ProblemStatePoint* construct(int l, Args&&... args) { return states[l] = new (mem[l]) ProblemStatePoint(args...); }
+   /// Destroy lane l's state
+   void destroy(int l) { states[l]->~ProblemStatePoint(); }
+   /// The state of lane l
+   ProblemStatePoint* operator[](int l) { return states[l]; }
+};
+
+/**
+ * @brief The PointStates of getResponseLanes: for one point, its state built
+ * from the arguments (the ProblemState constructor's); for a pack, the empty
+ * storage (the arguments are not used). Returned as a prvalue, so the state is
+ * constructed in the caller's variable (no copy; C++17).
+ */
+template<class ProblemStatePoint, bool single_point, int n_lanes, class... Args>
+__ecmech_hdev__ inline PointStates<ProblemStatePoint, single_point, n_lanes> make_point_states(Args&&... args)
+{
+   if constexpr (single_point) { return PointStates<ProblemStatePoint, true, n_lanes>(args...); }
+   else { return PointStates<ProblemStatePoint, false, n_lanes>(); }
+}
+
+/**
  * @brief getResponse for points ip*n_lanes .. ip*n_lanes+n_lanes-1, n_lanes = lanes of the value
  * type R: one point for R = double (the scalar CPU path and one GPU thread
  * per point), n_lanes points in lockstep for a pack (the CPU SIMD path).
@@ -199,14 +251,12 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    }
    double* hist_l[n_lanes]; double* stress_l[n_lanes]; double* energy_l[n_lanes]; double* sdd_l[n_lanes]; double* tkelv_l[n_lanes];
    [[maybe_unused]] double pad_hist[n_pad_lanes][single_point ? 1 : max_pack_hist], pad_stress[n_pad_lanes][8], pad_energy[n_pad_lanes][8], pad_sdd[n_pad_lanes][8], pad_tkelv[n_pad_lanes];
-   alignas(ProblemStatePoint) unsigned char point_state_mem[n_lanes][sizeof(ProblemStatePoint)];
-   ProblemStatePoint* point_states[n_lanes];
    alignas(SlipGeom) unsigned char geom_mem[(dynamic_geom && !single_point) ? n_lanes : 1][(dynamic_geom && !single_point) ? sizeof(SlipGeom) : 1];
    const SlipGeom* geom[n_lanes];
    bool preprocess_ok[n_lanes];
    double halfVMidDt[n_lanes], dev_strain_energy_total[n_lanes];
 
-   // per point: problem state and preprocess
+   // per point: the arrays (scratch copies for padding lanes)
    for (int l = 0; l < n_lanes; ++l) {
       const int i = point_idx[l];
       hist_l[l] = &a.histV[a.history_stride * i];
@@ -225,8 +275,19 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
             hist_l[l] = pad_hist[l]; stress_l[l] = pad_stress[l]; energy_l[l] = pad_energy[l]; sdd_l[l] = pad_sdd[l]; tkelv_l[l] = &pad_tkelv[l];
          }
       }
-      point_states[l] = new (point_state_mem[l]) ProblemStatePoint(hist_l[l], stress_l[l], *tkelv_l[l], &a.def_rate_d6vV[a.def_rate_stride * i],
+   }
+   // the problem states: one point's constructed directly, a pack's per lane below
+   PointStates<ProblemStatePoint, single_point, n_lanes> point_states = make_point_states<ProblemStatePoint, single_point, n_lanes>
+      (hist_l[0], stress_l[0], *tkelv_l[0], &a.def_rate_d6vV[a.def_rate_stride * point_idx[0]],
+       &a.spin_vecV[a.spin_v_stride * point_idx[0]], &a.rel_vol_ratiosV[a.vol_ratio_stride * point_idx[0]], dt);
+
+   // per point: preprocess
+   for (int l = 0; l < n_lanes; ++l) {
+      const int i = point_idx[l];
+      if constexpr (!single_point) {
+         point_states.construct(l, hist_l[l], stress_l[l], *tkelv_l[l], &a.def_rate_d6vV[a.def_rate_stride * i],
                                 &a.spin_vecV[a.spin_v_stride * i], &a.rel_vol_ratiosV[a.vol_ratio_stride * i], dt);
+      }
       // dynamic slip geometries: a copy per lane of a pack; one point uses the
       // caller's geometry, as getResponseSngl always did
       if constexpr (dynamic_geom && !single_point) { geom[l] = new (geom_mem[l]) SlipGeom(slipGeom); }
@@ -240,7 +301,9 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
 
    mask_t<R> converged = no_lanes<R>();
    if constexpr (single_point) {
-      if (!preprocess_ok[0]) { point_states[0]->~ProblemStatePoint(); return converged; }
+      // failed: nFEval >= 1 so that the caller's failure mark (nFEval *= -1)
+      // makes it negative (with nFEval still 0, at the first step, it would not)
+      if (!preprocess_ok[0]) { hist_l[0][iHistA_nFEval] = 1; return converged; }
    }
 
    // hardness update on the pack (KineticsOrowanD's reduced solve)
@@ -332,8 +395,14 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
    // bookkeeping, postprocess
    for (int l = 0; l < n_lanes; ++l) {
       if (!is_real[l] || !preprocess_ok[l] || !mask_lane(converged, l)) {
-         if (is_real[l] && preprocess_ok[l]) { set_mask_lane(converged, l, false); }
-         point_states[l]->~ProblemStatePoint();
+         if (is_real[l]) {
+            if (preprocess_ok[l]) { set_mask_lane(converged, l, false); }
+            // failed: nFEval >= 1 so that the caller's failure mark (nFEval *= -1)
+            // makes it negative (with nFEval still 0, at the first step, it would not)
+            const int f = preprocess_ok[l] ? solver.getNFEvals(l) : 0;
+            hist_l[l][iHistA_nFEval] = (f > 0) ? f : 1;
+         }
+         if constexpr (!single_point) { point_states.destroy(l); }
          continue;
       }
       const int i = point_idx[l];
@@ -361,7 +430,7 @@ inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const 
       for (int k = 0; k < ecmech::nsvec; ++k) { cauchy_stress_d5p_xtal[k] = lane(cauchy_xtal[k], l); }
       postprocess(p, elastN, &a.def_rate_d6vV[a.def_rate_stride * i], sdd_l[l], energy_l[l],
                   cauchy_stress_d5p_xtal, dev_strain_energy_total[l], halfVMidDt[l]);
-      p.~ProblemStatePoint();
+      if constexpr (!single_point) { point_states.destroy(l); }
    }
    if constexpr (dynamic_geom && !single_point) { for (int l = 0; l < n_lanes; ++l) { geom[l]->~SlipGeom(); } }
    return converged;
