@@ -548,8 +548,6 @@ namespace ecmech {
           * @param denom_i 1/g_MTS (see the file-level documentation), the reciprocal of
           * whichever stress is currently playing the MTS-normalizing role.
           * @param t_frac The dimensionless MTS argument t.
-          * Value type R: one point (double) or a pack of points (see
-          * ECMech_value_type.h).
           * @param active The points that need the result (true for one point);
           * pow() is evaluated only for them.
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
@@ -562,24 +560,29 @@ namespace ecmech {
                     R &mts_dfac,
                     const R& c_e, const R& denom_i,
                     const R& t_frac,
-                    const mask_t<R>& active) const { // active: the points that need the result
+                    const mask_t<R>& active) const {
             mts_dfac = c_e * denom_i;
 
             R p_func = t_frac;
             if (!pOne) {
                const auto tiny = (fabs(t_frac) < idp_tiny_sqrt);
                if (any(tiny)) {
+                  // !! p_dfac is either zero or blows up
+                  // !IF (pl%p > one) THEN ! no longer allowed
+                  // !   mts_dfac = zero
+                  // !ELSE
+                  // ! blows up, but just set big
                   set_where(tiny, p_func, zero);
-                  set_where(tiny, mts_dfac, mts_dfac * 1e10); // blow up
+                  set_where(tiny, mts_dfac, mts_dfac * 1e10);
                }
                if (m_p != one) { // the m_p == one case keeps p_func = t_frac
-                  const auto gen = active && !tiny;
-                  if (any(gen)) {
-                     const R t_frac_safe = select(gen, t_frac, R(one));
-                     R t_frac_pow_p = pow_where(gen, fabs(t_frac_safe), m_p);
+                  const auto needs_pow = active && !tiny;
+                  if (any(needs_pow)) {
+                     const R t_frac_safe = select(needs_pow, t_frac, R(one));
+                     R t_frac_pow_p = pow_where(needs_pow, fabs(t_frac_safe), m_p);
                      t_frac_pow_p = copysign(t_frac_pow_p, t_frac_safe);
-                     set_where(gen, p_func, t_frac_pow_p);
-                     set_where(gen, mts_dfac, mts_dfac * m_p * t_frac_pow_p / t_frac_safe);
+                     set_where(needs_pow, p_func, t_frac_pow_p);
+                     set_where(needs_pow, mts_dfac, mts_dfac * m_p * t_frac_pow_p / t_frac_safe); // always positive
                   }
                }
             }
@@ -588,15 +591,16 @@ namespace ecmech {
             const auto q_arg_small = (q_arg < idp_tiny_sqrt);
             R pq_fac = q_arg;
             if (!qOne && m_q != one) {
-               const auto gen = active && !q_arg_small;
-               if (any(gen)) {
-                  const R q_arg_safe = select(gen, q_arg, R(one));
-                  const R temp = pow_where(gen, fabs(q_arg_safe), m_q);
-                  set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_arg_safe));
-                  set_where(gen, pq_fac, copysign(temp, q_arg_safe));
+               const auto needs_pow = active && !q_arg_small;
+               if (any(needs_pow)) {
+                  const R q_arg_safe = select(needs_pow, q_arg, R(one));
+                  const R temp = pow_where(needs_pow, fabs(q_arg_safe), m_q);
+                  set_where(needs_pow, mts_dfac, mts_dfac * m_q * temp / fabs(q_arg_safe));
+                  set_where(needs_pow, pq_fac, copysign(temp, q_arg_safe));
                }
             }
             if (any(q_arg_small)) {
+               // peg
                set_where(q_arg_small, mts_dfac, zero);
                set_where(q_arg_small, pq_fac, zero);
             }
@@ -626,9 +630,8 @@ namespace ecmech {
           * `perSS`).
           * @param tau Resolved shear stress τ [stress units].
           * @param mu Shear modulus, used to form the thermal energy prefactor c_e.
-          * Value type R: one point (double) or a pack of points (see
-          * ECMech_value_type.h); each early return of the scalar law is a
-          * per-point "done" mask, and for double these are the original returns.
+          * @note For a pack, each early return of the scalar law is a per-point "done"
+          * mask; for double these are the original returns.
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
@@ -657,6 +660,7 @@ namespace ecmech {
             const double t_max = m_t_max[iVal];
             const double t_min = m_t_min[iVal];
 
+            // zero things so that can more easily just return if inactive
             gdot = zero;
             dgdot_dtau = zero;
             l_act = no_lanes<R>();
@@ -685,6 +689,7 @@ namespace ecmech {
             R gdot_r, dgdot_r_dtau;
             {
                const R exp_arg = (fabs(tau) - gAth) / m_wrD;
+               // note that this should catch tau <= g
                done = done || (exp_arg < gam_ratio_min);
                if (all(done)) {
                   // gdot_r is zero
@@ -698,9 +703,9 @@ namespace ecmech {
                   set_where(small_exp_arg, temp, one - exp_arg);
                }
                if (any(!small_exp_arg)) {
-                  const R e = exp_where(!done && !small_exp_arg, -exp_arg);
-                  set_where(!small_exp_arg, temp, e);
-                  set_where(!small_exp_arg, gdot_r, gam_r * (one - e));
+                  const R exp_neg_arg = exp_where(!done && !small_exp_arg, -exp_arg);
+                  set_where(!small_exp_arg, temp, exp_neg_arg);
+                  set_where(!small_exp_arg, gdot_r, gam_r * (one - exp_neg_arg));
                }
                dgdot_r_dtau = gam_r * temp / m_wrD;
             }
@@ -719,6 +724,8 @@ namespace ecmech {
             }
 
             R gdot_w, dgdot_w_dtau;
+            //
+            // calculate thermally activated kinetics
             {
                const R c_e = c_t * mu;
                const R t_frac = (fabs(tau) - gAth) * g_i;
@@ -731,7 +738,6 @@ namespace ecmech {
                   return;
                }
 
-               // !!! gdot_w = gam_w * exp(exp_arg)
                gdot_w = gam_w * exp_where(!done, exp_arg);
                dgdot_w_dtau = mts_dfac * gdot_w;
 
@@ -739,14 +745,15 @@ namespace ecmech {
                R exp_arg_m, mts_dfac_m;
                get_mts_dG(exp_arg_m, mts_dfac_m, c_e, g_i, t_frac_m, !done);
 
-               const auto back = !done && (exp_arg_m > ln_gam_ratio_min);
-               if (any(back)) {
+               const auto has_back_term = !done && (exp_arg_m > ln_gam_ratio_min);
+               if (any(has_back_term)) {
                   // non-vanishing contribution from balancing MTS-like kinetics
-                  const R gdot_w_m = gam_w * exp_where(back, exp_arg_m);
-                  set_where(back, gdot_w, gdot_w - gdot_w_m);
+                  const R gdot_w_m = gam_w * exp_where(has_back_term, exp_arg_m);
+                  set_where(has_back_term, gdot_w, gdot_w - gdot_w_m);
                   const R contrib = mts_dfac_m * gdot_w_m;
-                  set_where(back, dgdot_w_dtau, dgdot_w_dtau - contrib);
-                  done = done || (back && (fabs(gdot_w / gam_w) < gam_ratio_min));
+                  // sign used to be the other way, but suspect that was a bug
+                  set_where(has_back_term, dgdot_w_dtau, dgdot_w_dtau - contrib);
+                  done = done || (has_back_term && (fabs(gdot_w / gam_w) < gam_ratio_min));
                   if (all(done)) {
                      // effectively zero from roundoff
                      return;
@@ -754,32 +761,30 @@ namespace ecmech {
                }
             }
 
-            const auto pl = !done && (at_0 > t_min);
-            if (any(pl)) {
+            const auto power_law = !done && (at_0 > t_min);
+            if (any(power_law)) {
                // need power-law part
-               const R abslog = log_where(pl, at_0);
+               const R abslog = log_where(power_law, at_0);
                const R blog = xn * abslog;
-               const R temp = (gam_w * gdot_w_pl_scaling) * exp_where(pl, blog);
+               const R temp = (gam_w * gdot_w_pl_scaling) * exp_where(power_law, blog);
 
                const R gdot_w_pl = temp * at_0; // not signed
-               set_where(pl, gdot_w, gdot_w + gdot_w_pl);
+               set_where(power_law, gdot_w, gdot_w + gdot_w_pl);
 
                const R contrib = temp * xnn * g_i;
-               set_where(pl, dgdot_w_dtau, dgdot_w_dtau + contrib);
+               set_where(power_law, dgdot_w_dtau, dgdot_w_dtau + contrib);
             }
 
             const auto not_done = !done;
             l_act = l_act || not_done;
             {
-               const R g = one / (one / gdot_w + one / gdot_r);
+               const R gdot_combined = one / (one / gdot_w + one / gdot_r);
                const R gdrdiv2 = one / (gdot_r * gdot_r);
                const R gdwdiv2 = one / (gdot_w * gdot_w);
-               set_where(not_done, dgdot_dtau, (g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
-               set_where(not_done, gdot, copysign(g, tau));
+               set_where(not_done, dgdot_dtau, (gdot_combined * gdot_combined) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
+               set_where(not_done, gdot, copysign(gdot_combined, tau));
             }
          } // evalGdot
-
-
 
          /**
           * @brief Advance the single relative/normalized dislocation-density hardening

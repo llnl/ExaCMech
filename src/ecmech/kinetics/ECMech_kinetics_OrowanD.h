@@ -209,7 +209,7 @@
 #include "SNLS_NewtonBB.h"
 
 namespace ecmech {
-   /**
+   /*
     * Reduced log-form Orowan hardening update: the single-point (per slip
     * system) mobile dislocation density solve.
     *
@@ -251,8 +251,8 @@ namespace ecmech {
     */
    /// The NewtonBB iteration for the mobile densities. g is smooth, increasing
    /// and convex, so the Newton step is taken whenever it stays inside the
-   /// bracket (NewtonBBStep::newtonFirst): the same results as the classic
-   /// safeguarded iteration here, with less work per iteration in lockstep.
+   /// bracket (NewtonBBStep::newtonFirst): the same results as
+   /// NewtonBBStep::safeguarded here, with less work per iteration in lockstep.
    constexpr snls::NewtonBBStep orowan_mobile_step = snls::NewtonBBStep::newtonFirst;
 
    /// g_i and dg_i/dyM_i for NewtonBB (R: one point, double, or a pack of points)
@@ -263,7 +263,7 @@ namespace ecmech {
       R q_dmult_dtrap;     ///< (c_mult - c_trap) √f_i
       double c_ann_d_ann;  ///< c_ann d_ann
       /// the last y_m evaluated and its q_m = e^(y_m), per lane (see mobile_q_m)
-      R y_m_ev = R(-1e300), q_m_ev = R(0.0);
+      R y_m_last = R(-1e300), q_m_last = R(0.0);
       __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y_m) { return computeFJ(f, J, y_m, all_lanes<R>()); }
       /// active: the lanes NewtonBB needs a value for (exp only for those)
       __ecmech_hdev__ mask_t<R> computeFJ(R& f, R& J, const R& y_m, const mask_t<R>& active) {
@@ -272,8 +272,8 @@ namespace ecmech {
          f = y_m - y_m_o - dt_nu * (q_dmult_dtrap - c_ann_d_ann * q_m);
          // dg_i/dyM_i = 1 + Δt v_i c_ann d_ann qM_i
          J = 1.0 + dt_nu * c_ann_d_ann * q_m;
-         set_where(active, y_m_ev, y_m);
-         set_where(active, q_m_ev, q_m);
+         set_where(active, y_m_last, y_m);
+         set_where(active, q_m_last, q_m);
          return all_lanes<R>();
       }
    };
@@ -285,12 +285,12 @@ namespace ecmech {
    __ecmech_hdev__ SNLS_VT_INLINE R mobile_q_m(const OrowanMobileFJ<R>& fj, const R& y_m)
    {
       if constexpr (snls::is_scalar_value<R>()) {
-         return (y_m == fj.y_m_ev) ? fj.q_m_ev : exp(y_m);
+         return (y_m == fj.y_m_last) ? fj.q_m_last : exp(y_m);
       }
       else {
-         const mask_t<R> have = (y_m == fj.y_m_ev);
-         if (all(have)) { return fj.q_m_ev; }
-         return select(have, fj.q_m_ev, exp_where(!have, y_m));
+         const mask_t<R> have = (y_m == fj.y_m_last);
+         if (all(have)) { return fj.q_m_last; }
+         return select(have, fj.q_m_last, exp_where(!have, y_m));
       }
    }
 
@@ -415,10 +415,9 @@ namespace ecmech {
 
    /// Reduced-form counterpart of updateHN for KineticsOrowanD (log form).
    /// hs_n and hs_o hold log densities, mobile first. Same solver settings
-   /// as updateHN; returns the number of function evaluations or -1.
-   /// For one point (R = double) returns the number of function
-   /// evaluations (-1 on failure), as before; for a pack of points (solved
-   /// in lockstep by SNLSTrDlDenseG) returns the points that converged.
+   /// as updateHN. Returns, for one point (R = double), the number of
+   /// function evaluations, or -1 on failure; for a pack, the points that
+   /// converged.
    template<class Kinetics, class R = double>
    __ecmech_hdev__
    inline
@@ -1000,8 +999,6 @@ namespace ecmech {
           * @param denom_i 1/g_MTS, the reciprocal of whichever stress is currently
           * playing the MTS-normalizing role.
           * @param t_frac The dimensionless MTS argument t.
-          * Value type R: one point (double) or a pack of points (see
-          * ECMech_value_type.h).
           * @param active The points that need the result (true for one point);
           * pow() is evaluated only for them.
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
@@ -1014,24 +1011,29 @@ namespace ecmech {
                     R &mts_dfac,
                     const R& c_e, const R& denom_i,
                     const R& t_frac,
-                    const mask_t<R>& active) const { // active: the points that need the result
+                    const mask_t<R>& active) const {
             mts_dfac = c_e * denom_i;
 
             R p_func = t_frac;
             if (!pOne) {
                const auto tiny = (fabs(t_frac) < idp_tiny_sqrt);
                if (any(tiny)) {
+                  // !! p_dfac is either zero or blows up
+                  // !IF (pl%p > one) THEN ! no longer allowed
+                  // !   mts_dfac = zero
+                  // !ELSE
+                  // ! blows up, but just set big
                   set_where(tiny, p_func, zero);
-                  set_where(tiny, mts_dfac, mts_dfac * 1e10); // blow up
+                  set_where(tiny, mts_dfac, mts_dfac * 1e10);
                }
                if (m_p != one) { // the m_p == one case keeps p_func = t_frac
-                  const auto gen = active && !tiny;
-                  if (any(gen)) {
-                     const R t_frac_safe = select(gen, t_frac, R(one));
-                     R t_frac_pow_p = pow_where(gen, fabs(t_frac_safe), m_p);
+                  const auto needs_pow = active && !tiny;
+                  if (any(needs_pow)) {
+                     const R t_frac_safe = select(needs_pow, t_frac, R(one));
+                     R t_frac_pow_p = pow_where(needs_pow, fabs(t_frac_safe), m_p);
                      t_frac_pow_p = copysign(t_frac_pow_p, t_frac_safe);
-                     set_where(gen, p_func, t_frac_pow_p);
-                     set_where(gen, mts_dfac, mts_dfac * m_p * t_frac_pow_p / t_frac_safe);
+                     set_where(needs_pow, p_func, t_frac_pow_p);
+                     set_where(needs_pow, mts_dfac, mts_dfac * m_p * t_frac_pow_p / t_frac_safe); // always positive
                   }
                }
             }
@@ -1040,15 +1042,16 @@ namespace ecmech {
             const auto q_arg_small = (q_arg < idp_tiny_sqrt);
             R pq_fac = q_arg;
             if (!qOne && m_q != one) {
-               const auto gen = active && !q_arg_small;
-               if (any(gen)) {
-                  const R q_arg_safe = select(gen, q_arg, R(one));
-                  const R temp = pow_where(gen, fabs(q_arg_safe), m_q);
-                  set_where(gen, mts_dfac, mts_dfac * m_q * temp / fabs(q_arg_safe));
-                  set_where(gen, pq_fac, copysign(temp, q_arg_safe));
+               const auto needs_pow = active && !q_arg_small;
+               if (any(needs_pow)) {
+                  const R q_arg_safe = select(needs_pow, q_arg, R(one));
+                  const R temp = pow_where(needs_pow, fabs(q_arg_safe), m_q);
+                  set_where(needs_pow, mts_dfac, mts_dfac * m_q * temp / fabs(q_arg_safe));
+                  set_where(needs_pow, pq_fac, copysign(temp, q_arg_safe));
                }
             }
             if (any(q_arg_small)) {
+               // peg
                set_where(q_arg_small, mts_dfac, zero);
                set_where(q_arg_small, pq_fac, zero);
             }
@@ -1071,9 +1074,8 @@ namespace ecmech {
           * `perSS`).
           * @param tau Resolved shear stress τ [stress units].
           * @param mu Shear modulus, used to form the thermal energy prefactor c_e.
-          * Value type R: one point (double) or a pack of points (see
-          * ECMech_value_type.h); each early return of the scalar law is a
-          * per-point "done" mask, and for double these are the original returns.
+          * @note For a pack, each early return of the scalar law is a per-point "done"
+          * mask; for double these are the original returns.
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
@@ -1102,6 +1104,7 @@ namespace ecmech {
             const R gam_w = m_lbar_b * m_fD / sqrt(qm);
             const R gam_r = m_gam_ro * qm;
 
+            // zero things so that can more easily just return if inactive
             gdot = zero;
             dgdot_dtau = zero;
             l_act = no_lanes<R>();
@@ -1130,6 +1133,7 @@ namespace ecmech {
             R gdot_r, dgdot_r_dtau;
             {
                const R exp_arg = (fabs(tau) - gAth) / m_wrD;
+               // note that this should catch tau <= g
                done = done || (exp_arg < gam_ratio_min);
                if (all(done)) {
                   // gdot_r is zero
@@ -1143,9 +1147,9 @@ namespace ecmech {
                   set_where(small_exp_arg, temp, one - exp_arg);
                }
                if (any(!small_exp_arg)) {
-                  const R e = exp_where(!done && !small_exp_arg, -exp_arg);
-                  set_where(!small_exp_arg, temp, e);
-                  set_where(!small_exp_arg, gdot_r, gam_r * (one - e));
+                  const R exp_neg_arg = exp_where(!done && !small_exp_arg, -exp_arg);
+                  set_where(!small_exp_arg, temp, exp_neg_arg);
+                  set_where(!small_exp_arg, gdot_r, gam_r * (one - exp_neg_arg));
                }
                dgdot_r_dtau = gam_r * temp / m_wrD;
             }
@@ -1164,6 +1168,8 @@ namespace ecmech {
             }
 
             R gdot_w, dgdot_w_dtau;
+            //
+            // calculate thermally activated kinetics
             {
                const R c_e = c_t * mu;
                const R t_frac = (fabs(tau) - gAth) * g_i;
@@ -1176,7 +1182,6 @@ namespace ecmech {
                   return;
                }
 
-               // !!! gdot_w = gam_w * exp(exp_arg)
                gdot_w = gam_w * exp_where(!done, exp_arg);
                dgdot_w_dtau = mts_dfac * gdot_w;
 
@@ -1184,14 +1189,15 @@ namespace ecmech {
                R exp_arg_m, mts_dfac_m;
                get_mts_dG(exp_arg_m, mts_dfac_m, c_e, g_i, t_frac_m, !done);
 
-               const auto back = !done && (exp_arg_m > ln_gam_ratio_min);
-               if (any(back)) {
+               const auto has_back_term = !done && (exp_arg_m > ln_gam_ratio_min);
+               if (any(has_back_term)) {
                   // non-vanishing contribution from balancing MTS-like kinetics
-                  const R gdot_w_m = gam_w * exp_where(back, exp_arg_m);
-                  set_where(back, gdot_w, gdot_w - gdot_w_m);
+                  const R gdot_w_m = gam_w * exp_where(has_back_term, exp_arg_m);
+                  set_where(has_back_term, gdot_w, gdot_w - gdot_w_m);
                   const R contrib = mts_dfac_m * gdot_w_m;
-                  set_where(back, dgdot_w_dtau, dgdot_w_dtau - contrib);
-                  done = done || (back && (fabs(gdot_w / gam_w) < gam_ratio_min));
+                  // sign used to be the other way, but suspect that was a bug
+                  set_where(has_back_term, dgdot_w_dtau, dgdot_w_dtau - contrib);
+                  done = done || (has_back_term && (fabs(gdot_w / gam_w) < gam_ratio_min));
                   if (all(done)) {
                      // effectively zero from roundoff
                      return;
@@ -1199,32 +1205,84 @@ namespace ecmech {
                }
             }
 
-            const auto pl = !done && (at_0 > t_min);
-            if (any(pl)) {
+            const auto power_law = !done && (at_0 > t_min);
+            if (any(power_law)) {
                // need power-law part
-               const R abslog = log_where(pl, at_0);
+               const R abslog = log_where(power_law, at_0);
                const R blog = xn * abslog;
-               const R temp = (gam_w * gdot_w_pl_scaling) * exp_where(pl, blog);
+               const R temp = (gam_w * gdot_w_pl_scaling) * exp_where(power_law, blog);
 
                const R gdot_w_pl = temp * at_0; // not signed
-               set_where(pl, gdot_w, gdot_w + gdot_w_pl);
+               set_where(power_law, gdot_w, gdot_w + gdot_w_pl);
 
                const R contrib = temp * xnn * g_i;
-               set_where(pl, dgdot_w_dtau, dgdot_w_dtau + contrib);
+               set_where(power_law, dgdot_w_dtau, dgdot_w_dtau + contrib);
             }
 
             const auto not_done = !done;
             l_act = l_act || not_done;
             {
-               const R g = one / (one / gdot_w + one / gdot_r);
+               const R gdot_combined = one / (one / gdot_w + one / gdot_r);
                const R gdrdiv2 = one / (gdot_r * gdot_r);
                const R gdwdiv2 = one / (gdot_w * gdot_w);
-               set_where(not_done, dgdot_dtau, (g * g) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
-               set_where(not_done, gdot, copysign(g, tau));
+               set_where(not_done, dgdot_dtau, (gdot_combined * gdot_combined) * (dgdot_w_dtau * gdwdiv2 + dgdot_r_dtau * gdrdiv2));
+               set_where(not_done, gdot, copysign(gdot_combined, tau));
             }
          } // evalGdot
 
+         /**
+          * @brief Inputs of the dislocation-density update: the densities floored
+          * at #m_hdn_min (their logs if `LOGFORM`), and the per-slip-system glide
+          * rates nu = |gdot| / (qM b).
+          * @param[out] ihs_o Floored (log-)densities [2*nslip]: mobile then total
+          * @param[out] nu Glide rates [nslip]
+          * @param[in] hs_o Beginning-of-step densities [2*nslip]
+          * @param[in] gdot Beginning-of-step slip rates [nslip]
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+          */
+         template<class R>
+         __ecmech_hdev__
+         inline
+         void hardening_inputs(R* const ihs_o, R* const nu, const R* const hs_o, const R* const gdot) const
+         {
+            for (int i = 0; i < nslip * 2; i++) {
+               if (i < nslip) {
+                  const R div = perSS ? fmax(hs_o[i], R(m_hdn_min)) * m_berg_mag[i] :
+                                fmax(hs_o[i], R(m_hdn_min)) * m_berg_mag[0];
+                  nu[i] = fabs(gdot[i]) / (div);
+               }
+               ihs_o[i] = fmax(hs_o[i], R(m_hdn_min));
+               if (LOGFORM) {
+                  ihs_o[i] = log(ihs_o[i]);
+               }
+            }
+         }
 
+         /**
+          * @brief The reduced log-form update (updateH with `LOGFORM`) for a pack
+          * of points.
+          * @param[out] hs_u Updated densities [2*nslip]: mobile then total
+          * @param[in] hs_o Beginning-of-step densities [2*nslip]
+          * @param dt Time step size
+          * @param[in] gdot Beginning-of-step slip rates [nslip]
+          * @return the points that converged
+          * @tparam R value type: a pack of points (ECMech_value_type.h)
+          */
+         template<class R>
+         __ecmech_hdev__
+         inline
+         mask_t<R> updateHLanes(R* const hs_u, const R* const hs_o, double dt, const R* const gdot) const
+         {
+            static_assert(LOGFORM, "pack hardening update: reduced log-form solve only");
+            R ihs_o[SlipGeom::nslip * 2];
+            R nu[SlipGeom::nslip];
+            hardening_inputs(ihs_o, nu, hs_o, gdot);
+            const mask_t<R> ok = updateHOrowanReduced<KineticsOrowanD, R>(this, &hs_u[0], &ihs_o[0], dt, nu);
+            for (int i = 0; i < nslip * 2; i++) {
+               hs_u[i] = exp(hs_u[i]);
+            }
+            return ok;
+         }
 
          /**
           * @brief Advance the per-slip-system mobile and total dislocation densities
@@ -1239,9 +1297,8 @@ namespace ecmech {
           * and the result is exponentiated back. In that case the update is solved in
           * the total densities only (#updateHOrowanReduced, an nslip x nslip SNLS
           * solve; the mobile densities are solved per slip system inside each
-          * evaluation, see #reduced_hardening).
-          * Otherwise (not `LOGFORM`) the coupled 2*nslip x 2*nslip #updateHN solve is used, and the raw
-          * (non-log) solve has
+          * evaluation, see #reduced_hardening). Otherwise (not `LOGFORM`) the coupled
+          * 2*nslip x 2*nslip #updateHN solve is used, and the raw (non-log) solve has
           * no such guarantee, so the result is checked for negative densities; if any
           * are found, the step is retried by substepping: `dt` is split into 10 equal
           * substeps, and each substep re-derives `nu` from the *original* `gdot` (the
@@ -1265,46 +1322,6 @@ namespace ecmech {
           * negative value if the (non-substepped) solve failed to converge.
           * @see updateHN in ECMech_kinetics.h
           */
-         /// Inputs of the dislocation-density update (value type R: one
-         /// point or a pack): bounded (log-)densities and the per-slip-system
-         /// rates nu = |gdot| / (rho_m b).
-         template<class R>
-         __ecmech_hdev__
-         inline
-         void hardening_inputs(R* const ihs_o, R* const nu, const R* const hs_o, const R* const gdot) const
-         {
-            for (int i = 0; i < nslip * 2; i++) {
-               if (i < nslip) {
-                  const R div = perSS ? fmax(hs_o[i], R(m_hdn_min)) * m_berg_mag[i] :
-                                fmax(hs_o[i], R(m_hdn_min)) * m_berg_mag[0];
-                  nu[i] = fabs(gdot[i]) / (div);
-               }
-               ihs_o[i] = fmax(hs_o[i], R(m_hdn_min));
-               if (LOGFORM) {
-                  ihs_o[i] = log(ihs_o[i]);
-               }
-            }
-         }
-
-         /// The reduced log-form update (updateH with LOGFORM) for a pack
-         /// of points: hs_u gets the new densities; returns the points
-         /// that converged.
-         template<class R>
-         __ecmech_hdev__
-         inline
-         mask_t<R> updateHLanes(R* const hs_u, const R* const hs_o, double dt, const R* const gdot) const
-         {
-            static_assert(LOGFORM, "pack hardening update: reduced log-form solve only");
-            R ihs_o[SlipGeom::nslip * 2];
-            R nu[SlipGeom::nslip];
-            hardening_inputs(ihs_o, nu, hs_o, gdot);
-            const mask_t<R> ok = updateHOrowanReduced<KineticsOrowanD, R>(this, &hs_u[0], &ihs_o[0], dt, nu);
-            for (int i = 0; i < nslip * 2; i++) {
-               hs_u[i] = exp(hs_u[i]);
-            }
-            return ok;
-         }
-
          __ecmech_hdev__
          inline
          int
@@ -1429,12 +1446,12 @@ namespace ecmech {
           * @param[in]  dt        Δt
           * @param[out] y_m        yM solving the mobile equations
           * @param[out] dt_sdot_t Δt sdotT_i (nslip): the predicted increment of yT_i
-          * @param[out] dsdot     d(Δt sdotT_i)/dyT_j, row-major nslip x nslip, or nullptr;
+          * @param[out] jacobian  d(Δt sdotT_i)/dyT_j, row-major nslip x nslip, or nullptr;
           *                       with res_scale and x_scale given, instead the outer
           *                       solver's scaled Jacobian
           *                       delta_ij - res_scale_i x_scale_j d(Δt sdotT_i)/dyT_j
           * @param[in]  y_m_guess  initial guesses for the mobile solves, or nullptr for y_m_o
-          * @param[in]  res_scale, x_scale  the outer problem's scaling (see dsdot), or nullptr
+          * @param[in]  res_scale, x_scale  the outer problem's scaling (see jacobian), or nullptr
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
@@ -1447,16 +1464,16 @@ namespace ecmech {
                           const double dt,
                           R* const y_m,
                           R* const dt_sdot_t,
-                          R* const dsdot,
+                          R* const jacobian,
                           const R* const y_m_guess = nullptr,
                           const R* const res_scale = nullptr,
                           const R* const x_scale = nullptr) const
          {
             constexpr int n = SlipGeom::nslip;
-            R q[n];            // total densities qT_i = e^(yT_i)
-            for (int i = 0; i < n; i++) { q[i] = exp(y_t[i]); }
+            R q_t[n];          // total densities qT_i = e^(yT_i)
+            for (int i = 0; i < n; i++) { q_t[i] = exp(y_t[i]); }
             R forest_dis[n];   // forest densities f_i = sum_j A_mat_ij qT_j
-            vecsVMa<n>(&forest_dis[0], &m_a_mat[0], &q[0]);
+            vecsVMa<n>(&forest_dis[0], &m_a_mat[0], &q_t[0]);
             const double c_mult_trap = m_c_mult - m_c_trap;
             const double c_ann_d_ann = m_c_ann * m_d_ann;
             for (int i = 0; i < n; i++) {
@@ -1470,22 +1487,22 @@ namespace ecmech {
                const R q_m = sol.q_m;
                y_m[i] = sol.y_m;
                // Δt sdotT_i = Δt v_i qM_i (c_mult √f_i - c_ann d_ann qM_i) / qT_i
-               dt_sdot_t[i] = dt_nu * q_m * (m_c_mult * sqrt_fD - c_ann_d_ann * q_m) / q[i];
-               if (dsdot) {
+               dt_sdot_t[i] = dt_nu * q_m * (m_c_mult * sqrt_fD - c_ann_d_ann * q_m) / q_t[i];
+               if (jacobian) {
                   const R dg_dy_m = one + dt_nu * c_ann_d_ann * q_m;                     // dg_i/dyM_i
                   for (int j = 0; j < n; j++) {
-                     const R dsqrt_fD_dy_t = m_a_mat[i * n + j] * q[j] / (2.0 * sqrt_fD); // d√f_i/dyT_j
+                     const R dsqrt_fD_dy_t = m_a_mat[i * n + j] * q_t[j] / (2.0 * sqrt_fD); // d√f_i/dyT_j
                      const R dy_m_dy_t = dt_nu * c_mult_trap * dsqrt_fD_dy_t / dg_dy_m;     // dyM_i/dyT_j
-                     R v = dt_nu / q[i] * ((m_c_mult * sqrt_fD - 2.0 * c_ann_d_ann * q_m) * q_m * dy_m_dy_t
-                                           + m_c_mult * q_m * dsqrt_fD_dy_t)
-                           - ((i == j) ? dt_sdot_t[i] : R(0.0));
+                     R dsdot_ij = dt_nu / q_t[i] * ((m_c_mult * sqrt_fD - 2.0 * c_ann_d_ann * q_m) * q_m * dy_m_dy_t
+                                                  + m_c_mult * q_m * dsqrt_fD_dy_t)
+                                  - ((i == j) ? dt_sdot_t[i] : R(0.0));
                      if (res_scale) {
                         // the outer solver's scaled Jacobian, written here in one pass
-                        // (a second pass over it in computeRJ cost the GPU kernels ~1.3 KB of stack)
-                        v *= -res_scale[i] * x_scale[j];
-                        if (i == j) { v += 1.0; }
+                        // (rescaling it afterwards in computeRJ would need a second nslip x nslip pass)
+                        dsdot_ij *= -res_scale[i] * x_scale[j];
+                        if (i == j) { dsdot_ij += 1.0; }
                      }
-                     dsdot[i * n + j] = v;
+                     jacobian[i * n + j] = dsdot_ij;
                   }
                }
             }

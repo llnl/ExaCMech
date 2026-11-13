@@ -14,6 +14,8 @@ Struct member variables differ from class member variables as they are generally
 
 Function names should also be lowercase with `_` between names. However as earlier noted, we still have not exactly enforced this at this point.
 
+Type traits (compile-time checks such as `has_pack_slip_rates` or `simd_supported`, with a `::value`) follow the C++ standard library's form instead: lowercase with `_`, like `std::is_same`.
+
 # Variable Names:
 
 We have a wide range of different variables used through out the code. This is a short guide on at least some of them and is by no means a complete guide to everything in the library.
@@ -53,7 +55,7 @@ The value-type layer (masks, `select`, `set_where`, `any`, `all`, the `_where` m
 
 `matModel::getResponseECM` (`ECMech_evptnWrap.h`) chooses the path for each call:
 
-1. **CPU and OpenMP backends, model supported by the pack path** (`simd::simd_supported`): `simd::getResponseSimd` (`simd/ECMech_simd_evptn.h`) splits the points into packs of `ECMECH_SIMD_LANES` points. It runs the packs with `RAJA::forall` (OpenMP when SNLS and RAJA were built with OpenMP, else sequentially) and calls `evptn::getResponseLanes<PackDouble>` for each pack. If the last pack is not full, its extra lanes repeat the last point on scratch copies, so they write nothing.
+1. **CPU and OpenMP backends, model supported by the pack path** (`simd::simd_supported`): `simd::getResponseSimd` (`simd/ECMech_simd_evptn.h`) splits the points into packs of `ECMECH_SIMD_LANES` points. It runs the packs with `RAJA::forall`: in parallel with OpenMP when the OpenMP backend is selected and RAJA and SNLS were built with OpenMP, else sequentially and calls `evptn::getResponseLanes<PackDouble>` for each pack. If the last pack is not full, its extra lanes repeat the last point on scratch copies, so they write nothing.
 2. **The GPU, and models the pack path does not support:** `getResponsePerPoint` runs `evptn::getResponseSngl` for each point with `snls::forall` (blocks of `ECMECH_GPU_THREADS` threads on the GPU). `getResponseSngl` is `getResponseLanes<double>` on the point's arrays.
 3. **On all backends,** points that failed to converge are marked (`hist[iHistA_nFEval] *= -1`), and `getResponseRetry` solves them again with the backup solvers (`ENABLE_EXTRA_SOLVERS`).
 
@@ -68,7 +70,7 @@ The value-type layer (masks, `select`, `set_where`, `any`, `all`, the `_where` m
 4. **The tangent, the state update and the slip quantities** for postprocessing, on `R`.
 5. **Per point:** the results are scattered back, then `postprocess` runs.
 
-For `R = double` the gather and scatter steps compile away (`if constexpr`), and the driver performs the same operations as the original one-point code.
+For `R = double` the gather and scatter steps compile away (`if constexpr`); the driver then runs the one-point form of the same templated code.
 
 ## Build options
 
@@ -82,10 +84,10 @@ Both ExaCMech options reach the code through the generated `ECMech_config.h`.
 
 ## Supporting a model on the pack path
 
-A model runs on packs when its kinetics class provides `evalGdots` templated on the value type (`evptn::pack_supported`, checked by `simd::simd_supported`). Models without it run one point at a time on the CPU, with no code change needed. To add pack support to a model, its classes need the following (SIMDGuide.md shows how to convert the code):
+A model runs on packs when its kinetics class provides `evalGdots` templated on the value type (checked by `simd::simd_supported`). Models without it run one point at a time on the CPU, with no code change needed. To add pack support to a model, its classes need the following (SIMDGuide.md shows how to convert the code):
 
 - **Kinetics.** `template<class R> void evalGdots(R* gdot, R* dgdot_dtau, const R* tau, const R* vals) const`, and whatever it calls, templated on `R`.
-  - `getVals` stays scalar; the driver calls it point by point (`kinetic_values`).
+  - `getVals` stays scalar; the driver calls it point by point (`get_kinetic_values`).
   - The hardness update stays scalar (`updateH` in `preprocess`), unless the kinetics also provides `template<class R> mask_t<R> updateHLanes(R* hs_u, const R* hs_o, double dt, const R* gdot) const`, which updates a whole pack and returns the points that converged.
 - **Slip geometry.** A fixed geometry (P and Q the same for every point) works as is. A stress-dependent geometry (`dynamic = true`) is gathered per lane into a `SlipGeomPack`. If its resolved shear stress depends on the stress only, it can declare `static constexpr bool rss_from_stress = true` and provide a templated `evalRSS`, as `SlipGeomBCCNonSchmid` does.
 - **Elasticity.** The `ThermoElastN` methods used by `EvptnUpdstProblem` are templated on `R` (`ThermoElastNCubic`, `ThermoElastNHexag`).
@@ -101,7 +103,7 @@ Device code always uses `double`; packs are host-only. In code that runs on the 
 
 ## Testing
 
-**Pack and one-point results must agree bit for bit.** For `R = double` the templated code performs the original operations, so with floating-point contraction off a pack gives each point exactly its one-point result. Check that after any change to templated code:
+**Pack and one-point results must agree bit for bit.** Each lane of a pack performs exactly the operations of the one-point (`R = double`) code, so with floating-point contraction off a pack gives each point exactly its one-point result. Check that after any change to templated code:
 
 1. Build twice with `-ffp-contract=off` in `CMAKE_CXX_FLAGS`: once with `ECMECH_SIMD_LANES=1` (one point per pack) and once with the default width.
 2. Run the miniapp on the CPU backend with both builds.
@@ -109,7 +111,7 @@ Device code always uses `double`; packs are host-only. In code that runs on the 
 
 With contraction on (the default), the compiler may fuse multiply-adds differently in the two versions, so the last digits can differ.
 
-**GPU and CPU agree to rounding.** The GPU backend uses the one-point path. Compare its `CHECKSUM` lines with the CPU backend's; they agree to rounding (about 1e-12 relative or better), not bitwise, because the device math library differs from the host's.
+**GPU and CPU agree to rounding.** The GPU backend uses the one-point path. Compare its `CHECKSUM` lines with the CPU backend's; they agree to rounding, not bitwise, because the device math library differs from the host's.
 
 # Further Notes:
 If you find something unclear in either the documentation or code please open an issue asking for clarification. Alternatively, if you find issues with those same topics feel free to open a PR with a fix as generally our developer team's bandwidth is limited so some of these items will be lower on the priority list for us.

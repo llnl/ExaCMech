@@ -937,25 +937,24 @@ namespace ecmech {
                      }
                  }
                  
-                 // Keep highest value
-                 // the sense with the larger projection (per point)
+                 // keep the sense with the larger projection (per point)
                  const auto second = (tau_s[1] > tau_s[0]);
                  
                  taua[iSlip] = select(second, tau_s[1], tau_s[0]);
                  taua[iSlip] = select(taua[iSlip] < 0.0, R(0.0), taua[iSlip]);
                  
                  if constexpr (snls::is_scalar_value<R>()) { // P and Q are filled per point (getPQ)
-                 const int iS = second ? 1 : 0;
-                 if (fill_PQ) {
-                     for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
-                         P_vec[ECMECH_NM_INDX(iTvec, iSlip, ecmech::ntvec, nslip)] = P_s[iS * ecmech::ntvec + iTvec];
-                         m_P_vec[ECMECH_NM_INDX(iTvec, iSlip, ecmech::ntvec, nslip)] = P_s[iS * ecmech::ntvec + iTvec];
+                     const int iS = second ? 1 : 0;
+                     if (fill_PQ) {
+                         for (int iTvec = 0; iTvec < ecmech::ntvec; ++iTvec) {
+                             P_vec[ECMECH_NM_INDX(iTvec, iSlip, ecmech::ntvec, nslip)] = P_s[iS * ecmech::ntvec + iTvec];
+                             m_P_vec[ECMECH_NM_INDX(iTvec, iSlip, ecmech::ntvec, nslip)] = P_s[iS * ecmech::ntvec + iTvec];
+                         }
+                         for (int iWvec = 0; iWvec < ecmech::nwvec; ++iWvec) {
+                             Q_vec[ECMECH_NM_INDX(iWvec, iSlip, ecmech::nwvec, nslip)] = Q_s[iS * ecmech::nwvec + iWvec];
+                             m_Q_vec[ECMECH_NM_INDX(iWvec, iSlip, ecmech::nwvec, nslip)] = Q_s[iS * ecmech::nwvec + iWvec];
+                         }
                      }
-                     for (int iWvec = 0; iWvec < ecmech::nwvec; ++iWvec) {
-                         Q_vec[ECMECH_NM_INDX(iWvec, iSlip, ecmech::nwvec, nslip)] = Q_s[iS * ecmech::nwvec + iWvec];
-                         m_Q_vec[ECMECH_NM_INDX(iWvec, iSlip, ecmech::nwvec, nslip)] = Q_s[iS * ecmech::nwvec + iWvec];
-                     }
-                 }
                  }
              }
          }
@@ -1021,13 +1020,23 @@ namespace ecmech {
             }
          }
 
-         /// The resolved shear stress depends on the stress only (not on the
-         /// per-point P), so a pack of points can use the projection directly.
+         /**
+          * @brief The resolved shear stress depends on the stress only (not on the
+          * per-point P), so a pack of points can use the projection directly.
+          */
          static constexpr bool rss_from_stress = true;
-         /// evalRSS for a pack of points (value type R, see ECMech_value_type.h)
+         /**
+          * @brief Compute resolved shear stress with non-Schmid effects, for a pack of
+          * points; see the double version above.
+          * @param[out] taua Resolved shear stress per system
+          * @param[in] kirchoff Kirchhoff stress
+          * @param[in] P_vec unused (the projection depends on the stress only)
+          * @tparam R value type: a pack of points (ECMech_value_type.h)
+          * @tparam T value type of kirchoff (double or R)
+          */
          template<class R, class T>
-         __ecmech_hdev__ inline void evalRSS(R* taua, 
-                                             const T* const kirchoff, 
+         __ecmech_hdev__ inline void evalRSS(R* taua,
+                                             const T* const kirchoff,
                                              const double* /*P_vec*/) const
          {
             if (m_isotropic) {

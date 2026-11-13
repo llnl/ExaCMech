@@ -34,7 +34,6 @@
 
 #if defined(__ecmech_host_only__)
 #include <sstream>
-#include <cstdlib>
 #endif
 
 #include "ECMech_matModelBase.h"
@@ -564,14 +563,11 @@ namespace ecmech {
              * **Execution flow**:
              * 1. Validate m_complete flag
              * 2. Extract stride configuration
-             * 3. Capture component pointers for GPU lambda
-             * 4. Launch RAJA parallel loop over material points
-             * 5. For each point:
-             *    - Set up problem state (deformation, orientation, history)
-             *    - Create SNLS solver and problem instance
-             *    - Solve nonlinear system
-             *    - Update stress, history, temperature
-             *    - Optionally compute tangent stiffness
+             * 3. On the CPU and OpenMP backends, for models the pack path supports:
+             *    simd::getResponseSimd (packs of ECMECH_SIMD_LANES points)
+             * 4. Otherwise (the GPU, or other models): getResponsePerPoint, one
+             *    point per thread
+             * 5. Points that failed are retried with getResponseRetry
              * 
              * **Parallelization**:
              * - RAJA execution strategy set by setExecutionStrategy()
@@ -630,7 +626,7 @@ namespace ecmech {
                   ECMECH_FAIL(__func__, "not complete");
                }
 
-               const simd::PackArrays pack_arrays{dt, m_tolerance,
+               const evptn::ResponseArrays response_arrays{dt, m_tolerance,
                   def_rate_d6vV, m_strides[istride_def_rate], spin_vecV, m_strides[istride_spin_v],
                   rel_vol_ratiosV, m_strides[istride_vol_ratio], internal_energyV, m_strides[istride_int_eng],
                   cauchy_stress_d6pV, m_strides[istride_stress], histV, m_strides[istride_history],
@@ -638,10 +634,10 @@ namespace ecmech {
                // CPU and OpenMP backends: SIMD across points (packs of n_lanes
                // points, simd/ECMech_simd_evptn.h) for every model the pack path
                // supports; the GPU and the other models solve one point per thread.
-               if constexpr (simd::simd_supported<SlipGeom, Kinetics, ThermoElastN>::value) {
+               if constexpr (simd::simd_supported<Kinetics>::value) {
                   if (m_accel != ECM_EXEC_STRAT_GPU) {
                      simd::getResponseSimd<SlipGeom, Kinetics, ThermoElastN, EosModel>
-                        (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, pack_arrays, m_accel == ECM_EXEC_STRAT_OPENMP);
+                        (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, response_arrays, m_accel == ECM_EXEC_STRAT_OPENMP);
                      if (this->reduceStatus(histV, nPassed)) {
                         getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
                                          cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
@@ -658,8 +654,6 @@ namespace ecmech {
                }
             }// End of getResponse
 
-
-
             /**
              * @brief getResponseSngl for each material point, one point per GPU
              * thread (or per loop iteration on the CPU and OpenMP backends),
@@ -669,16 +663,16 @@ namespace ecmech {
              */
             __ecmech_host__
             void getResponsePerPoint(const double & dt,
-                                 const double * def_rate_d6vV,
-                                 const double * spin_vecV,
-                                 const double * rel_vol_ratiosV,
-                                 double * internal_energyV,
-                                 double * cauchy_stress_d6pV,
-                                 double * histV,
-                                 double * tkelvV,
-                                 double * sddV,
-                                 double * mtanSDV,
-                                 const int& nPassed) const
+                                     const double * def_rate_d6vV,
+                                     const double * spin_vecV,
+                                     const double * rel_vol_ratiosV,
+                                     double * internal_energyV,
+                                     double * cauchy_stress_d6pV,
+                                     double * histV,
+                                     double * tkelvV,
+                                     double * sddV,
+                                     double * mtanSDV,
+                                     const int& nPassed) const
             {
                // All of the stride lengths are constant within this function
                const unsigned int def_rate_stride = m_strides[istride_def_rate];
@@ -716,8 +710,7 @@ namespace ecmech {
                         tkelvV[tkelv_stride * i],
                         &sddV[sdd_stride * i],
                         mtanSDThis,
-                        outputLevel
-                        );
+                        outputLevel);
                   };
                   bool status;
                   // Thanks to NVCC being difficult we have to create an unnecessary temp variable just so we can use our
@@ -737,8 +730,6 @@ namespace ecmech {
                   }
                });
             }
-
-
 
             /**
              * @brief Retry constitutive response for failed material points using backup solver.

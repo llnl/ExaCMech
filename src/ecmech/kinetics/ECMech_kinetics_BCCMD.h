@@ -460,8 +460,29 @@ namespace ecmech {
          }
 
          /**
-          * @brief Slip rate of one slip system (value type R: one point or a
-          * pack, see ECMech_value_type.h).
+          * @brief Evaluate the pencil-glide power-law slip rate, smoothly capped by a
+          * phonon-drag velocity limit, for a single slip system -- see the "Slip-rate
+          * law" equations and symbol table in the file-level documentation in
+          * ECMech_kinetics_BCCMD.h.
+          *
+          * The stress ratio τ_eff/g is compared against thresholds derived from
+          * #gam_ratio_min/#gam_ratio_ovf (via `m_t_min`/`m_t_max`): below `m_t_min` the
+          * system is inactive; above `m_t_max` the power-law rate is capped at
+          * `gam_ratio_ovffx * gam_w` rather than evaluated directly (with derivatives
+          * left at zero). If the angularly-interpolated γ̇_w0(χ) comes out negative,
+          * γ̇_w = |γ̇_w0(χ)| is used directly, bypassing the density/Burgers-vector
+          * scaling.
+          * @param[out] gdot Slip rate γ̇ [1/time].
+          * @param[out] l_act The points whose slip system is active (stress ratio above
+          * the underflow threshold).
+          * @param[out] dgdot_dtau Derivative of `gdot` w.r.t. resolved shear stress.
+          * @param crss Current CRSS g (shared across all slip systems; from getVals).
+          * @param rho Current mobile dislocation density ρ for this slip system.
+          * @param tau Resolved shear stress τ [stress units].
+          * @param chi Pencil-glide MRSSP angle χ for this slip system.
+          * @param tkelv Temperature [Kelvin]; not currently used by this model (always
+          * called with `0.0` from evalGdots).
+          * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
          __ecmech_hdev__
@@ -475,9 +496,10 @@ namespace ecmech {
             const R & rho,
             const R & tau,
             const R & chi,
-            double
+            double   /*tkelv*/
             ) const
          {
+            // zero things so that can more easily just return in inactive
             gdot = zero;
             dgdot_dtau = zero;
             l_act = no_lanes<R>();
@@ -492,9 +514,9 @@ namespace ecmech {
             const double v0_AT = v0_T * 0.1;
             const R gam_w0 = v0_T + (M_PI/6.0 + chi) * 3.0/M_PI * (v0_AT - v0_T);
 
-            const R g_i = one / crss;
+            const R g_i = one / crss; // assume have checked gIn>0 elsewhere
             R t_frac = t_eff * g_i;
-            t_frac = copysign(t_frac, tau);
+            t_frac = copysign(t_frac, tau); // has sign of tau
             const R at = fabs(t_frac);
 
             const R gam_w = select(gam_w0 < 0.0, R(fabs(gam_w0)), R(rho * m_bmag * gam_w0));
@@ -506,25 +528,29 @@ namespace ecmech {
                l_act = above_t_min;
                const auto above_t_max = above_t_min && (at > m_t_max);
                if (any(above_t_max)) {
+                  // ierr = IERR_OVF_p
+                  // set gdot big, evpp may need this for recovery
+                  // do not set any of deriviatives (they are, in truth, zero)
                   set_where(above_t_max, gdot, copysign(R(ecmech::gam_ratio_ovffx * gam_w), tau));
                }
-               const auto pl = above_t_min && !(at > m_t_max);
-               if (any(pl)) {
-                  const R abslog = log(select(pl, at, R(one)));
+               const auto power_law = above_t_min && !(at > m_t_max);
+               if (any(power_law)) {
+                  const R abslog = log(select(power_law, at, R(one)));
                   const R blog = xn * abslog;
                   const R temp = gam_w * exp(blog);
-                  R g = temp * t_frac;
-                  R dg = temp * xnn * g_i;
-                  // drag limit: smooth min of the power law and gmax
+                  R gdot_pl = temp * t_frac;
+                  R dgdot_dtau_pl = temp * xnn * g_i; // note: always positive, = xnn * gdot/t
+                  // Smooth capping to gmax with Lorentz-like factor
                   const double ac = 10.0;
-                  const R gfrac_a = pow(fabs(g) / gmax, ac);
+                  const R gfrac_a = pow(fabs(gdot_pl) / gmax, ac);
                   const R dfact = pow(1.0 + gfrac_a, -(ac + 1.0) / ac);
+                  // Correct derivative accounting for gmax(tau)
                   const R dgmax = rho * m_bmag * m_vmax / m_tau_drag * exp(-t_eff/m_tau_drag);
-                  const R A = fabs(g) * dgmax * gfrac_a;
-                  dg = dfact * (A + gmax * dg) / gmax;
-                  g = g / pow(1.0 + gfrac_a, 1.0 / ac);
-                  set_where(pl, gdot, g);
-                  set_where(pl, dgdot_dtau, dg);
+                  const R A = fabs(gdot_pl) * dgmax * gfrac_a;
+                  dgdot_dtau_pl = dfact * (A + gmax * dgdot_dtau_pl) / gmax;
+                  gdot_pl = gdot_pl / pow(1.0 + gfrac_a, 1.0 / ac);
+                  set_where(power_law, gdot, gdot_pl);
+                  set_where(power_law, dgdot_dtau, dgdot_dtau_pl);
                }
             }
          } // evalGdot

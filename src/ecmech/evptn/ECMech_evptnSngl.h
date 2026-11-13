@@ -11,6 +11,7 @@
  * 
  * **Main entry point**:
  * - `getResponseSngl()`: Complete time step integration for one material point
+ *   (defined in ECMech_evptnLanes.h, included at the end of this file)
  * - `getResponseNRSngl()`: Alternative with simplified rotation treatment (optional)
  * 
  * **Integration workflow**:
@@ -60,7 +61,7 @@
  * **Solver configuration**:
  * - Uses SNLS trust region dense Gauss-Newton solver
  * - Default tolerance: passed as parameter (typically 1e-8 to 1e-12)
- * - Max iterations: 200 (hard-coded in main_problem)
+ * - Max iterations: max_newton_iterations (200)
  * - Initial trust region: 1.0
  * 
  * **Advanced features**:
@@ -222,11 +223,11 @@ bool preprocess(const SlipGeom& slipGeom,
         slipGeom.getPQ(hvals, P, Q, stress_dev6_press);
     }
     if constexpr (!SkipHardening) {
-    const int nfevals = kinetics.updateH(prob_state.h_state_u, prob_state.h_state, prob_state.dt, prob_state.gdot, hvals, prob_state.tkelv);
-    if (nfevals < 0) {
-        ECMECH_WARN(__func__, "Hardening failed to converge");
-        return false;
-    }
+        const int nfevals = kinetics.updateH(prob_state.h_state_u, prob_state.h_state, prob_state.dt, prob_state.gdot, hvals, prob_state.tkelv);
+        if (nfevals < 0) {
+            ECMECH_WARN(__func__, "Hardening failed to converge");
+            return false;
+        }
     }
 #if defined(ECMECH_EXTRA_SOLVERS)
     if constexpr (RStarSolve) {
@@ -244,6 +245,10 @@ bool preprocess(const SlipGeom& slipGeom,
 #endif
     return true;
 }
+
+/// Most Newton iterations of the main (elastic strain and rotation) solve
+/// (main_problem and getResponseLanes)
+constexpr int max_newton_iterations = 200;
 
 /**
  * @brief Solve the nonlinear crystal plasticity system via trust region Newton.
@@ -306,10 +311,7 @@ bool main_problem(const double tolerance,
 {
     snls::TrDeltaControl deltaControl;
     deltaControl._deltaInit = 1e0;
-    {
-        static constexpr int maxIter = 200;
-        solver.setupSolver(maxIter, tolerance, &deltaControl, outputLevel);
-    }
+    solver.setupSolver(max_newton_iterations, tolerance, &deltaControl, outputLevel);
 
     // set initial guess
     //
@@ -343,9 +345,7 @@ bool main_problem(const double tolerance,
  * 
  * **Computation approach**:
  * 1. Enable material tangent flag in problem: prob.provideMTan(mtanSD_vecds)
- * 2. Re-evaluate Jacobian: This triggers tangent accumulation. The slip
- *    kinetics are not recomputed: EvptnUpdstProblem reuses the results of the
- *    solver's last evaluation, which was at the same (converged) x
+ * 2. Re-evaluate Jacobian: This triggers tangent accumulation
  * 3. Disable tangent flag: prob.clearMTan()
  * 4. Scale from rate to increment: multiply by Δt
  * 5. Add volumetric EOS contribution (3K on diagonal)
@@ -639,17 +639,6 @@ void postprocess(ProblemState& prob_state,
 #endif
 }
 
-} // namespace evptn
-} // namespace ecmech
-// getResponseSngl (the complete time step for one material point) is defined,
-// with its documentation, in ECMech_evptnLanes.h: it is getResponseLanes<double>,
-// the same driver that the CPU SIMD path runs on packs.
-#include "evptn/ECMech_evptnLanes.h"
-namespace ecmech {
-namespace evptn {
-
-
-
 #if defined(ECMECH_EXTRA_SOLVERS)
 /**
  * @brief Alternative integration with simplified rotation treatment.
@@ -772,3 +761,8 @@ bool getResponseNRSngl(
 
 }
 }
+
+// getResponseSngl (the complete time step for one material point) is defined, with
+// its documentation, in ECMech_evptnLanes.h: it is getResponseLanes<double>, the same
+// driver that the CPU SIMD path runs on packs.
+#include "evptn/ECMech_evptnLanes.h"

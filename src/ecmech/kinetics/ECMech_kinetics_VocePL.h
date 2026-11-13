@@ -355,10 +355,8 @@ namespace ecmech {
           * @param gIn Current CRSS (flow strength) for this slip system, g.
           * @param tau Resolved shear stress τ [stress units].
           * @param mu Shear modulus; not currently used.
-          * Value type R: one point (double) or a pack of points (see
-          * ECMech_value_type.h).
-          * Per-point branches use masks; `log_where`/`exp_where` evaluate only
-          * the points that take the power-law branch.
+          * @note For a pack, the branches are per-point masks, and `log_where`/`exp_where`
+          * evaluate only the points that take the power-law branch.
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
@@ -374,12 +372,13 @@ namespace ecmech {
             double
             ) const
          {
+            // zero things so that can more easily just return in inactive
             gdot = zero;
             dgdot_dtau = zero;
             l_act = no_lanes<R>();
 
-            const R g_i = one / gIn;
-            const R t_frac = tau * g_i;
+            const R g_i = one / gIn; // assume have checked gIn>0 elsewhere
+            const R t_frac = tau * g_i; // has sign of tau
             const R at = fabs(t_frac);
 
             const auto above_t_min = (at > m_t_min);
@@ -387,17 +386,21 @@ namespace ecmech {
                l_act = above_t_min;
                const auto above_t_max = above_t_min && (at > m_t_max);
                if (any(above_t_max)) {
-                  // ML_ERROR_RETURN_VAL_IF(exp_arg > ln_gam_ratio_ovf, ...
+                  // ierr = IERR_OVF_p
+                  // set gdot big, evpp may need this for recovery
+                  // do not set any of deriviatives (they are, in truth, zero)
                   set_where(above_t_max, gdot, copysign(R(ecmech::gam_ratio_ovffx * m_gam_w), tau));
                }
-               const auto pl = above_t_min && !(at > m_t_max);
-               if (any(pl)) {
-                  const R abslog = log_where(pl, at);
+               const auto power_law = above_t_min && !(at > m_t_max);
+               if (any(power_law)) {
+                  const R abslog = log_where(power_law, at);
                   const R blog = m_xn * abslog;
-                  const R temp = m_gam_w * exp_where(pl, blog);
-                  const R g = temp * t_frac;
-                  set_where(pl, gdot, g);
-                  set_where(pl, dgdot_dtau, m_xnn * g / select(pl, tau, R(one)));
+                  const R temp = m_gam_w * exp_where(power_law, blog);
+                  const R gdot_pl = temp * t_frac;
+                  set_where(power_law, gdot, gdot_pl);
+                  // note: always positive, = xnn * gdot/t
+                  // dgdot_dh and dgdot_dg are the same thing for the voce model
+                  set_where(power_law, dgdot_dtau, m_xnn * gdot_pl / select(power_law, tau, R(one)));
                }
             }
          } // evalGdot

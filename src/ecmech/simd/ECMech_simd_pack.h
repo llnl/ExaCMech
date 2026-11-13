@@ -18,8 +18,6 @@ constexpr int n_lanes = ECMECH_SIMD_LANES;
 static_assert(n_lanes >= 1, "ECMECH_SIMD_LANES must be at least 1");
 /// The pack value type: n_lanes doubles, one per point
 using PackDouble = snls::simd::pack<n_lanes>;
-/// The mask type of PackDouble: one flag per point
-using PackMask = snls::simd::pack_mask<n_lanes>;
 } // namespace simd
 // (the math functions for packs are found by argument-dependent lookup)
 } // namespace ecmech

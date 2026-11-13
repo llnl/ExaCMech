@@ -100,7 +100,7 @@ namespace evptn {
      * @see quat_to_tensor() for generating xtal_rmat from quaternion
      * @see get_rot_mat_vecd() for generating xtal_rot_mat5 from 3×3 rotation
      * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
-     * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
+     * @tparam T1, T2, T3, T4 value types of the arguments declared with them, each double or R (double inputs need no conversion)
      */
     template<class R, class T1, class T2, class T3, class T4>
     __ecmech_hdev__
@@ -148,6 +148,9 @@ namespace evptn {
      *                           Typically: [slip_resistances, dislocation_densities, ...]
      * @param[in] slip_geom Reference to slip geometry object
      * @param[in] slip_kinetics Reference to kinetics object
+     * @param[out] gdot_out if not null, receives the slip rates γ̇ [nslip]
+     * @param[out] rss_out if not null, receives the resolved shear stresses, with the
+     *                     extra values of a dynamic geometry appended [nslip_dyn]
      * 
      * **Dynamic slip systems**:
      * If SlipGeom::dynamic is true, additional "extra" quantities (e.g., chi angles for
@@ -164,9 +167,8 @@ namespace evptn {
      * @see slip_geom.evalRSS() for resolved shear stress calculation
      * @see slip_kinetics.evalGdots() for slip rate evaluation
      * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
-     * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
+     * @tparam T1, T2 value types of the arguments declared with them, each double or R (double inputs need no conversion)
      */
-
     template<class SlipGeom, class SlipKinetics, class R, class T1, class T2>
     __ecmech_hdev__
     inline
@@ -196,17 +198,14 @@ namespace evptn {
         //
         // CALL plaw_eval(plastic_def_rate_d5, plastic_spin_vec, gss, crys, tkelv, ierr)
         // chi values are passed within extended taua array
-        bool split = false;
-        if (!split) {
-            slip_kinetics.evalGdots(gdot, dgdot_dtau, abs_resolved_shear_stress, kinetic_values);
-        }
-        
+        slip_kinetics.evalGdots(gdot, dgdot_dtau, abs_resolved_shear_stress, kinetic_values);
+
         //
         // CALL sum_slip_def(plastic_def_rate_d5, plastic_spin_vec, crys%tmp1_slp, crys) ;
         vecsVMa<ntvec, SlipGeom::nslip>(plastic_def_rate_d5, slip_geom.getP(), gdot);
         vecsVMa<nwvec, SlipGeom::nslip>(plastic_spin_vec, slip_geom.getQ(), gdot);
         // Optional copies for callers that reuse this evaluation (see
-        // EvptnUpdstProblem's kinetics cache).
+        // EvptnUpdstProblem's kinetics reuse).
         if (gdot_out) {
             for (int i = 0; i < SlipGeom::nslip; ++i) { gdot_out[i] = gdot[i]; }
         }
@@ -216,11 +215,11 @@ namespace evptn {
         }
     }
 
-    /// True if the elasticity class provides a diagonal dT/deps (dTdepsDiag)
+    /// True if the elasticity class provides a diagonal dT/deps (getDTDepsDiag)
     template<class T, class = void>
-    struct has_dTdepsDiag : std::false_type {};
+    struct has_dt_deps_diag : std::false_type {};
     template<class T>
-    struct has_dTdepsDiag<T, std::void_t<decltype(std::declval<const T&>().dTdepsDiag(std::declval<double*>(), 0.0))>>
+    struct has_dt_deps_diag<T, std::void_t<decltype(std::declval<const T&>().getDTDepsDiag(std::declval<double*>(), 0.0))>>
         : std::true_type {};
 
     /**
@@ -288,7 +287,7 @@ namespace evptn {
                                 )
     {
         if constexpr (SlipGeom::nslip > 0) {
-        if constexpr (has_dTdepsDiag<ThermoElastN>::value) {
+        if constexpr (has_dt_deps_diag<ThermoElastN>::value) {
             // Diagonal dT/deps (both current elasticity models): with
             // d_j = dT_j/deps_j and w_s = dgdot_dtau[s],
             //   dDp[i][j] = d_j * M_ij,  M_ij = sum_s P_is w_s P_js (symmetric)
@@ -298,13 +297,12 @@ namespace evptn {
             // Same values as below up to rounding (different association).
             constexpr int ns = SlipGeom::nslip;
             R d[ecmech::ntvec];
-            thermoElastN.dTdepsDiag(d, inv_a_vol);
+            thermoElastN.getDTDepsDiag(d, inv_a_vol);
             const auto* const P = slip_geom.getP();
             const auto* const Q = slip_geom.getQ();
-            int row_first = 0, row_stride = 1;
             R* dDp = dDp_hat_delast_strain;
             R* dWp = dWp_hat_delast_strain;
-            for (int iT = row_first; iT < ecmech::ntvec; iT += row_stride) {
+            for (int iT = 0; iT < ecmech::ntvec; ++iT) {
                 R p_dgdot[ns];
                 for (int s = 0; s < ns; ++s) { p_dgdot[s] = P[ECMECH_NM_INDX(iT, s, ecmech::ntvec, ns)] * dgdot_dtau[s]; }
                 for (int jT = iT; jT < ecmech::ntvec; ++jT) {
@@ -314,7 +312,7 @@ namespace evptn {
                     dDp[ECMECH_NM_INDX(jT, iT, ecmech::ntvec, ecmech::ntvec)] = d[iT] * m;
                 }
             }
-            for (int iW = row_first; iW < ecmech::nwvec; iW += row_stride) {
+            for (int iW = 0; iW < ecmech::nwvec; ++iW) {
                 R q_dgdot[ns];
                 for (int s = 0; s < ns; ++s) { q_dgdot[s] = Q[ECMECH_NM_INDX(iW, s, ecmech::nwvec, ns)] * dgdot_dtau[s]; }
                 for (int jT = 0; jT < ecmech::ntvec; ++jT) {
@@ -325,6 +323,8 @@ namespace evptn {
             }
             return;
         }
+        // fallback for elasticity classes without a diagonal dT/deps (none in
+        // ExaCMech today; kept for user-provided classes)
         R dtaua_deps[ ecmech::ntvec * SlipGeom::nslip ];
         thermoElastN.multDTDepsT(dtaua_deps, slip_geom.getP(), inv_a_vol, SlipGeom::nslip);
 
@@ -368,7 +368,7 @@ namespace evptn {
      * @see get_slip_rate_deriv_terms() for the deviatoric analogue
      * @see ThermoElastNHexag::getDTDepsSph() for the sensitivity vector
      * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
-     * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
+     * @tparam T1, T2, T3 value types of the arguments declared with them, each double or R (double inputs need no conversion)
      */
     template<class SlipGeom, class ThermoElastN, class R, class T1, class T2, class T3>
     __ecmech_hdev__
@@ -472,7 +472,7 @@ namespace evptn {
      * @see vecd_Deff() for tensor-based effective rate calculation
      * @see vecsssumabs() for sum of absolute values
      * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
-     * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
+     * @tparam T1, T2, T3 value types of the arguments declared with them, each double or R (double inputs need no conversion)
      */
     template<class SlipGeom, class SlipKinetics, class Elasticty, class R, class T1, class T2, class T3>
     __ecmech_hdev__
@@ -612,7 +612,7 @@ namespace evptn {
      * @see EvptnLatticeRotationProblem::get_omega_residual() for residual usage
      * @see EvptnLatticeStrainProblem::get_deriv_omega_wrt_elast_strain() for Jacobian usage
      * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
-     * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
+     * @tparam T1, T2, T3 value types of the arguments declared with them, each double or R (double inputs need no conversion)
      */
     template<class R, class T1, class T2, class T3>
     __ecmech_hdev__
@@ -803,7 +803,7 @@ namespace evptn {
      * @see qr6x6_pre_mul() for frame rotation operations
      * @see eval_d_dxi_impl_quat() for rotation derivative computations
      * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
-     * @tparam T1 .. Tn value types of the array arguments, each double or R, so double inputs need no conversion
+     * @tparam T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13 value types of the arguments declared with them, each double or R (double inputs need no conversion)
      */
     template<class ThermoElastN, size_t JAC_SIZE, size_t ind_sub_omega, class R, class T1, class T2, class T3, class T4, class T5, class T6, class T7, class T8, class T9, class T10, class T11, class T12, class T13>
     __ecmech_hdev__
@@ -884,9 +884,8 @@ namespace evptn {
         }
         // Now solve for our dstrain_ddefrate and domega_ddefrate terms
         const auto lu_ok = ::SNLS_LUP_SolveXV<JAC_SIZE>(const_cast<R*>(jacobian), dstrainomega_ddef_rate_t, nRHS);
-        const int err = all(lu_ok) ? 0 : -1;
-        if (err != 0) {
-            ECMECH_FAIL(__func__, "error from SNLS_LUP_SolveX");
+        if (!all(lu_ok)) {
+            ECMECH_FAIL(__func__, "error from SNLS_LUP_SolveXV");
         }
         }
 

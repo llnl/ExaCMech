@@ -73,14 +73,19 @@ public:
 #endif
     }
 
-    /// Host view of a sub-array that getNew returned for strategy strat
-    /// (moves the buffer to the host if needed). Only for end-of-run checks.
+    /**
+     * @brief Host pointer to a sub-array returned by getNew, for end-of-run checks
+     * (moves the buffer to the host if needed).
+     * @param p Pointer returned by getNew(..., strat)
+     * @param strat Execution strategy p was obtained for
+     * @return The matching host pointer
+     */
     const T* getHost(const T* p, const ecmech::ExecutionStrategy strat) {
 #if defined(SNLS_RAJA_PORT_SUITE) && defined(__snls_gpu_active__)
         if (strat == ecmech::ExecutionStrategy::GPU) {
             const T* dev_base = buffer.data(chai::ExecutionSpace::GPU);
-            const std::ptrdiff_t off = p - dev_base;
-            return buffer.data(chai::ExecutionSpace::CPU) + off;
+            const std::ptrdiff_t offset_items = p - dev_base;
+            return buffer.data(chai::ExecutionSpace::CPU) + offset_items;
         }
 #endif
         (void) strat;

@@ -238,11 +238,18 @@ namespace ecmech {
              // resolve stress onto slip systems
              vecsVaTM<ecmech::ntvec, nslip>(taua, kirchoff, P_vec);
          }
-         /// evalRSS for a pack of points (value type R, see ECMech_value_type.h);
-         /// double calls take the virtual version above
+         /**
+          * @brief Compute resolved shear stresses on slip systems, for a pack of points
+          * (double calls take the virtual version above).
+          * @param[out] taua Resolved shear stress per system, length nslip
+          * @param[in] kirchoff Kirchhoff stress (deviatoric 5-vector)
+          * @param[in] P_vec Symmetric Schmid components
+          * @tparam R value type: a pack of points (ECMech_value_type.h)
+          * @tparam T value type of kirchoff (double or R)
+          */
          template<class R, class T>
-         __ecmech_hdev__ inline void evalRSS(R* taua, 
-                                             const T* const kirchoff, 
+         __ecmech_hdev__ inline void evalRSS(R* taua,
+                                             const T* const kirchoff,
                                              const double* P_vec) const
          {
              vecsVaTM<ecmech::ntvec, nslip>(taua, kirchoff, P_vec);

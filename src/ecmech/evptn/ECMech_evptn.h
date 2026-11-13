@@ -91,7 +91,7 @@ namespace ecmech {
       /// function, point by point for a pack.
       template<class K, class R>
       __ecmech_hdev__
-      inline R kinetic_values(const K& k, R* const vals, const R& pressure, const R& tkelv, const R* const h_state)
+      inline R get_kinetic_values(const K& k, R* const vals, const R& pressure, const R& tkelv, const R* const h_state)
       {
          if constexpr (snls::is_scalar_value<R>()) {
             return k.getVals(vals, pressure, tkelv, h_state);
@@ -112,7 +112,7 @@ namespace ecmech {
       /// Kinetics::getFixedRefRate for value type R (point by point for a pack)
       template<class K, class R>
       __ecmech_hdev__
-      inline R fixed_ref_rate(const K& k, const R* const vals)
+      inline R get_fixed_ref_rate(const K& k, const R* const vals)
       {
          if constexpr (snls::is_scalar_value<R>()) {
             return k.getFixedRefRate(vals);
@@ -197,7 +197,7 @@ namespace ecmech {
             * 
             * **Scaling computation**:
             * ```
-            * reference_rate = max(‖D_sample‖, fixed_ref_rate)
+            * reference_rate = max(‖D_sample‖, get_fixed_ref_rate)
             * epsdot_scale_inv = 1 / reference_rate
             * rotincr_scale_inv = (1/Δt) * epsdot_scale_inv
             * ```
@@ -243,9 +243,9 @@ namespace ecmech {
                m_spin_vec_sample(prob_state.spin_vec_sample), // vel_grad_sm%w_veccp
                m_mtan_sI(nullptr)
             {
-               m_hdn_scale = kinetic_values(m_kinetics, m_kin_vals, prob_state.pressure_EOS, prob_state.tkelv, prob_state.h_state_u);
+               m_hdn_scale = get_kinetic_values(m_kinetics, m_kin_vals, prob_state.pressure_EOS, prob_state.tkelv, prob_state.h_state_u);
 
-               const R adots_ref = fixed_ref_rate(m_kinetics, m_kin_vals);
+               const R adots_ref = get_fixed_ref_rate(m_kinetics, m_kin_vals);
                const R eff = vecNorm<ntvec>(m_def_rate_d5_sample); // do not worry about factor of sqrt(twothird)
                m_epsdot_scale_inv = zero;
                const auto low_rate = (eff < epsdot_scl_nzeff * adots_ref);
@@ -536,8 +536,7 @@ namespace ecmech {
                   //
                   R dpl_deps_symm[ ecmech::ntvec * ecmech::ntvec ] = { 0.0 };
                   R dpl_deps_skew[ ecmech::nwvec * ecmech::ntvec ] = { 0.0 };
-                  get_slip_rate_deriv_terms(dpl_deps_symm, dpl_deps_skew, dgdot_dtau, m_lattice_strain_prob.m_inv_a_vol, m_slipGeom, m_lattice_strain_prob.m_thermo_elast_n
-                                            );
+                  get_slip_rate_deriv_terms(dpl_deps_symm, dpl_deps_skew, dgdot_dtau, m_lattice_strain_prob.m_inv_a_vol, m_slipGeom, m_lattice_strain_prob.m_thermo_elast_n);
 
                   // derivatives with respect to lattice orientation changes
                   R dxtal_ori_quat_dxi_T[ ecmech::nwvec * ecmech::qdim ];
@@ -708,16 +707,25 @@ namespace ecmech {
             /** @brief Pointer to material tangent stiffness (nullptr if not computing) */
             R* m_mtan_sI;
 
-            // Kinetics results of the most recent computeRJ, reused by the
-            // tangent and the postprocessing at the converged state (see computeRJ).
-            static constexpr size_t nslip_dynamic = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
+            // Kinetics reuse: the results of the most recent computeRJ, reused by
+            // the tangent and the postprocessing at the converged state (see computeRJ).
+            /** @brief Resolved shear stresses per slip system, plus the extra slip quantities of a dynamic geometry */
+            static constexpr size_t nslip_dyn = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
+            /** @brief The kinetics reuse members hold an evaluation (set by computeRJ) */
             bool m_kin_reuse_valid = false;
+            /** @brief x of that evaluation [nDimSys] */
             R m_kin_reuse_x[nDimSys];
+            /** @brief Deviatoric elastic strain of that evaluation [ntvec] */
             R m_kin_reuse_elast_d5[ecmech::ntvec];
+            /** @brief Slip rate derivatives ∂γ̇/∂τ [nslip] */
             R m_kin_reuse_dgdot_dtau[(SlipGeom::nslip > 0) ? SlipGeom::nslip : 1];
+            /** @brief Slip rates γ̇ [nslip] */
             R m_kin_reuse_gdot[(SlipGeom::nslip > 0) ? SlipGeom::nslip : 1];
-            R m_kin_reuse_rss[(nslip_dynamic > 0) ? nslip_dynamic : 1];
+            /** @brief Resolved shear stresses (and extra slip quantities) [nslip_dyn] */
+            R m_kin_reuse_rss[(nslip_dyn > 0) ? nslip_dyn : 1];
+            /** @brief Plastic deformation rate [ntvec] */
             R m_kin_reuse_plastic_def_rate_d5[ecmech::ntvec];
+            /** @brief Plastic spin [nwvec] */
             R m_kin_reuse_plastic_spin_vec[ecmech::nwvec];
       }; // class EvptnUpdstProblem
 

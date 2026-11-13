@@ -14,7 +14,7 @@ The examples are pseudo-code close to the real code; the names are those of `ECM
 1. **Template on the value type.** Write `template<class R>` and use `R` for every per-point quantity. Parameters, constants and other values that are the same for all points stay `double`.
 2. **Never branch on a per-point value directly.** A comparison of `R` values gives a mask, `mask_t<R>` (a `bool` for `double`). Use masks with `select`, `set_where`, `any` and `all`.
 3. **Call math functions unqualified:** `exp(x)`, `sqrt(x)`, `fmax(a, b)`, never `std::exp`. The pack overloads are found by argument-dependent lookup, and `std::` math is not available in GPU device code.
-4. **For `R = double` the code must do exactly what the original scalar code did.** Then the GPU path and the one-point path are unchanged, and a pack gives each point the one-point result.
+4. **For `R = double` the templated code is the one-point code.** Write it so that each lane of a pack performs exactly the operations it performs for `double`; then a pack gives each point the one-point result.
 5. **Packs are for host code only.** GPU code always uses `double`. Do not put packs in device memory or in objects copied to the GPU.
 
 ## The tools
@@ -148,7 +148,7 @@ The loop continues while any lane is still iterating. A converged lane keeps its
 
 Do not write such a loop yourself for a nonlinear solve. SNLS's solvers do it, and they take a value type:
 
-- **Trust region:** `snls::SNLSTrDlDenseG<Problem, n, R>`. The problem's `computeRJ(R* r, R* J, const R* x)` returns `mask_t<R>`. Read the results with `solver.getConverged()` and, per lane, `solver.getNFEvals(l)` and `solver.getStatus(l)`. Pass a mask to `solver.solve(active)` to solve only some lanes.
+- **Trust region:** `snls::SNLSTrDlDenseG<Problem, n, R>`. The problem's `computeRJ(R* r, R* J, const R* x)` returns `mask_t<R>` (the lanes whose evaluation succeeded) or `bool` (applied to every lane), as `EvptnUpdstProblem` does. Read the results with `solver.getConverged()` and, per lane, `solver.getNFEvals(l)` and `solver.getStatus(l)`. Pass a mask to `solver.solve(active)` to solve only some lanes.
 - **One equation:** `snls::NewtonBB<FJ, R, Step>`, whose `computeFJ(R& f, R& J, const R& x)` may also take `const mask_t<R>& active`. The `solve_orowan_mobile` function in the Orowan kinetics is an example.
 
 ## Example 5: code that stays per point
@@ -157,14 +157,15 @@ Some code is cheap, rarely called, or awkward to vectorize: parameter lookups, t
 
 ```cpp
 template<class K, class R>
-R kinetic_values(const K& k, R* vals, const R& pressure, const R& tkelv, const R* h_state) {
+R get_kinetic_values(const K& k, R* vals, const R& pressure, const R& tkelv, const R* h_state) {
    if constexpr (snls::is_scalar_value<R>()) {
       return k.getVals(vals, pressure, tkelv, h_state);     // the scalar function itself
    }
    else {
       R scale;
       for (int l = 0; l < lanes_of<R>(); ++l) {             // one point at a time
-         double v[K::nVals], h[K::nH];
+         double v[K::nVals];
+         double h[(K::nH > 0) ? K::nH : 1];
          for (int j = 0; j < K::nH; ++j) { h[j] = lane(h_state[j], l); }
          set_lane(scale, l, k.getVals(v, lane(pressure, l), lane(tkelv, l), h));
          for (int j = 0; j < K::nVals; ++j) { set_lane(vals[j], l, v[j]); }
@@ -174,7 +175,7 @@ R kinetic_values(const K& k, R* vals, const R& pressure, const R& tkelv, const R
 }
 ```
 
-`kinetic_values` in `evptn/ECMech_evptn.h` is this function. The same pattern gathers point data into packs, and scatters results back, in `getResponseLanes`.
+`get_kinetic_values` in `evptn/ECMech_evptn.h` is this function. The same pattern gathers point data into packs, and scatters results back, in `getResponseLanes`.
 
 ## Example 6: side effects that only make sense for one point
 
@@ -196,9 +197,9 @@ void projection(R* taua, double* P_out, const R* kirchoff, bool fill_PQ) const {
 
 `SlipGeomBCCNonSchmid::NSprojection` does this. For a pack, `getResponseLanes` keeps a copy of the geometry per lane, and `SlipGeomPack` gathers the per-lane P and Q.
 
-## Example 7: per-point integers and indices
+## Example 7: per-point indices
 
-Pivot rows in an LU factorization, or a selected slip system, differ per point. Use `index_t<R>`: `int` for `double`, one integer per lane for a pack. Read through it with `value_traits<R>::gather(array, index)`. SNLS's dense LU (`SNLS_LUP_SolveXV`) shows the pattern.
+Pivot rows in an LU factorization differ per point. Use `index_t<R>`: `int` for `double`, and for a pack a pack of the same width holding one row index per lane (as doubles). Read through it with `value_traits<R>::gather(array, index)`. SNLS's `SNLS_LUP_DecomposeDenseV` and `SNLS_LUP_SubstituteDenseV` (`SNLS_lup_solve.h`) show the pattern.
 
 ## Pitfalls
 

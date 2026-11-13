@@ -33,12 +33,8 @@ static int outputLevel = 1;
 TEST(ecmech, hard_orowan_fcc)
 {
    using namespace ecmech;
-   // Baselines from the reduced (total-density) form of the Orowan update
-   // (KineticsOrowanD::reduced_hardening). They differ from the earlier
-   // coupled-solve baselines (1.000688247427146e+4 / 4.001148109947428e+4,
-   // and 1.992139383887259e-2 / 5.896582642644239e-2 with 4 evaluations)
-   // by at most 4.4e-11 relative, within the hardening solver's tolerance;
-   // the two formulations take different Newton paths to the same solution.
+   // Baselines from the reduced (total-density) form of the update
+   // (KineticsOrowanD::reduced_hardening)
 #ifdef LARGE_DD
    const double hUpdtVal1 = 1.0006882474268619e+04;
    const double hUpdtVal2 = 4.0011481099918143e+04;
@@ -72,8 +68,6 @@ TEST(ecmech, hard_orowan_fcc)
       double tkelv = 300;
       int nFEvals = kinetics.updateH(hs_u, &(init[0]), dt, gdot, hvals, tkelv, outputLevel);
       std::cout << "Converged with nFEvals : " << nFEvals << std::endl;
-      std::cout << std::setprecision(16) << std::scientific
-                << "hs_u[0] = " << hs_u[0] << " hs_u[12] = " << hs_u[12] << std::endl;
 
       EXPECT_TRUE(nFEvals == nevals) << "Not the expected number of function evaluations";
 #ifdef ECMECH_DEBUG
