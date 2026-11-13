@@ -1,22 +1,14 @@
 #pragma once
 /**
  * @file ECMech_simd_evptn.h
- * @brief CPU SIMD path (ECMECH_SIMD_EXPT, run time ECMECH_SIMD=1): the
- * CPU/OpenMP launcher that runs evptn::getResponseLanes (the one getResponse
- * driver, ECMech_evptnLanes.h) on packs of n_lanes points (simd/ECMech_simd_pack.h).
+ * @brief The CPU SIMD path: the CPU/OpenMP launcher that runs
+ * evptn::getResponseLanes (the one getResponse driver, ECMech_evptnLanes.h) on
+ * packs of n_lanes points (simd/ECMech_simd_pack.h). getResponseECM uses it on
+ * the CPU and OpenMP backends for every model it supports (simd_supported).
  */
 
-#if defined(ECMECH_SIMD_EXPT)
-
-#include <algorithm>
-#include <cstdio>
-#include <cstdlib>
-#include <type_traits>
-#include <vector>
 #include "RAJA/RAJA.hpp"
-#if defined(ECMECH_SIMD_EXPT)
 #include "simd/ECMech_simd_pack.h"
-#endif
 #include "evptn/ECMech_evptnSngl.h"
 
 namespace ecmech {
@@ -25,7 +17,6 @@ using evptn::PackArrays;
 using evptn::max_pack_hist;
 using evptn::pack_supported;
 
-#if defined(ECMECH_SIMD_EXPT)
 /**
  * @brief Whether the CPU SIMD path supports a model (evptn::pack_supported for
  * the pack type PackDouble); other models run the one-point path.
@@ -37,26 +28,14 @@ struct simd_supported {
 };
 
 /**
- * @brief Run-time switch of the CPU SIMD path: the environment variable
- * ECMECH_SIMD is set (read once).
- * @return true if the SIMD path should run
- */
-inline bool simd_enabled()
-{
-   static const bool on = std::getenv("ECMECH_SIMD") != nullptr;
-   return on;
-}
-
-/**
  * @brief CPU/OpenMP SIMD path: getResponse for a.nPassed points, n_lanes at a
  * time, with evptn::getResponseLanes on PackDouble. Points that fail to
  * converge are marked as getResponseSolo marks them (hist[iHistA_nFEval] *= -1).
- * ECMECH_SIMD_STATS (run time) prints the main solve's lane utilization.
  *
  * @tparam SlipGeom, Kinetics, ThermoElastN, EosModel the model's classes
  * @param[in] slipGeom, kinetics, elastN, eos the model
  * @param[in,out] a the arrays of the getResponseECM call
- * @param[in] use_openmp run the packs in an OpenMP parallel loop
+ * @param[in] use_openmp run the packs in an OpenMP parallel loop (RAJA)
  */
 template<class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
 void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const ThermoElastN& elastN, const EosModel& eos,
@@ -65,42 +44,24 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
    static_assert(simd_supported<SlipGeom, Kinetics, ThermoElastN>::value, "unsupported model for the SIMD path");
    if (a.history_stride > (unsigned)max_pack_hist) { ECMECH_FAIL(__func__, "SIMD path: history too long for the padding scratch"); }
    const int n_packs = (a.nPassed + n_lanes - 1) / n_lanes;
-   // ECMECH_SIMD_STATS=1: lane utilization of the main solve
-   static const bool stats_on = std::getenv("ECMECH_SIMD_STATS") != nullptr;
-   static long stat_useful = 0, stat_issued = 0, stat_calls = 0;
 
-   long* const stat_useful_ptr = &stat_useful;
-   long* const stat_issued_ptr = &stat_issued;
    auto pack_body = [&] (int ip) {
-      int fevals[n_lanes + 1];
-      const auto converged = evptn::getResponseLanes<PackDouble>(ip, slipGeom, kinetics, elastN, eos, a, stats_on ? fevals : nullptr);
+      const auto converged = evptn::getResponseLanes<PackDouble>(ip, slipGeom, kinetics, elastN, eos, a);
       for (int l = 0; l < n_lanes; ++l) {
          const int i = ip * n_lanes + l;
          if (i < a.nPassed && !mask_lane(converged, l)) { a.histV[a.history_stride * i + evptn::iHistA_nFEval] *= -1; } // as getResponseSolo marks a failure
       }
-      if (stats_on) {
-         long sum = 0;
-         for (int l = 0; l < n_lanes; ++l) { sum += fevals[l]; }
-         RAJA::atomicAdd<RAJA::auto_atomic>(stat_useful_ptr, sum);
-         RAJA::atomicAdd<RAJA::auto_atomic>(stat_issued_ptr, long(fevals[n_lanes]) * n_lanes);
-      }
    };
    // the packs in parallel through RAJA (no OpenMP in this file: builds without
-   // OpenMP, e.g. Apple clang, run the sequential loop)
+   // OpenMP run the sequential loop)
    const RAJA::RangeSegment packs(0, n_packs);
 #if defined(RAJA_ENABLE_OPENMP) && defined(OPENMP_ENABLE)
    if (use_openmp) { RAJA::forall<RAJA::omp_parallel_for_exec>(packs, pack_body); }
    else
 #endif
    { (void) use_openmp; RAJA::forall<RAJA::seq_exec>(packs, pack_body); }
-   if (stats_on && (++stat_calls % 60 == 0)) {
-      std::printf("SIMDSTATS lanes %d main-solve lane utilization %.3f (useful %ld / issued %ld)\n",
-                  n_lanes, double(stat_useful) / double(stat_issued), stat_useful, stat_issued);
-   }
 }
-#endif
 
 } // namespace simd
 } // namespace ecmech
 
-#endif // ECMECH_SIMD_EXPT

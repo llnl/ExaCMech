@@ -13,7 +13,9 @@ option(ENABLE_THROW "Enable throwing of exceptions" ON)
 
 option(USE_DPEFF "Output effective D^p rather than effective shearing rates" ON)
 option(ENABLE_EXTRA_SOLVERS "Enable extra solvers to be used if original solve fails" ON)
-option(ENABLE_VOCE_KINETICS_REUSE "Reuse the last slip-kinetics evaluation at the converged state for the Voce kinetics (see EvptnUpdstProblem); turn off where recomputing the cheap Voce kinetics is faster" ON)
+
+set(ECMECH_SIMD_LANES "4" CACHE STRING "Material points per pack on the CPU SIMD path (pack width)")
+set(ECMECH_GPU_THREADS "256" CACHE STRING "Threads per block of ExaCMech's GPU kernels")
 
 option(ENABLE_MINIAPPS "Enable miniapps" OFF)
 option(ENABLE_PYTHON "Enable building of python bindings" OFF)

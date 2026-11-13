@@ -1,24 +1,21 @@
 #pragma once
 /**
  * @file ECMech_simd_pack.h
- * @brief CPU SIMD path (ECMECH_SIMD_EXPT): the pack value type, n_lanes points in
- * one snls::simd::pack<n_lanes> (SNLS_pack.h: plain arrays that the compiler
+ * @brief The CPU SIMD path's value type: n_lanes material points in one
+ * snls::simd::pack<n_lanes> (SNLS_pack.h: plain arrays that the compiler
  * vectorizes, standard C++17, per-lane math functions).
  *
- * n_lanes defaults to the ISA's double width (8 with AVX-512, 4 with AVX, else 2);
- * -DECMECH_SIMD_LANES=N overrides it.
+ * n_lanes is the CMake option ECMECH_SIMD_LANES (default 4, see ECMech_config.h).
  */
 
+#include "ECMech_config.h"
 #include "SNLS_pack.h"
 
 namespace ecmech {
 namespace simd {
-/// Points per pack on the CPU SIMD path
-#if defined(ECMECH_SIMD_LANES)
+/// Points per pack on the CPU SIMD path (CMake option ECMECH_SIMD_LANES)
 constexpr int n_lanes = ECMECH_SIMD_LANES;
-#else
-constexpr int n_lanes = snls::simd::pack_native_lanes();
-#endif
+static_assert(n_lanes >= 1, "ECMECH_SIMD_LANES must be at least 1");
 /// The pack value type: n_lanes doubles, one per point
 using PackDouble = snls::simd::pack<n_lanes>;
 /// The mask type of PackDouble: one flag per point

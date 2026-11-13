@@ -19,4 +19,7 @@
 #cmakedefine ECMECH_PY
 /** @brief Enables the alternate evptn nonlinear-solve formulations (elastic-strain-only and rotation-only sub-problems in evptn/ECMech_evptn.h) that are not needed by the primary combined strain+rotation solve. Set via the CMake option of the same name. */
 #cmakedefine ECMECH_EXTRA_SOLVERS
-#cmakedefine ECMECH_VOCE_NO_KINETICS_REUSE
+/** @brief Material points per pack on the CPU SIMD path (the pack width, simd/ECMech_simd_pack.h). Set via the CMake option of the same name (default 4). */
+#define ECMECH_SIMD_LANES @ECMECH_SIMD_LANES@
+/** @brief Threads per block of ExaCMech's GPU kernels. Set via the CMake option of the same name (default 256). */
+#define ECMECH_GPU_THREADS @ECMECH_GPU_THREADS@

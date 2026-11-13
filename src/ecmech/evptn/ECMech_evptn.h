@@ -80,13 +80,6 @@
 namespace ecmech {
    namespace evptn {
 
-      /// Kinetics::reuse_evaluations if the kinetics class declares it, true otherwise
-      template<class K, class = void>
-      struct kinetics_reuse_evaluations : std::true_type {};
-      template<class K>
-      struct kinetics_reuse_evaluations<K, std::void_t<decltype(K::reuse_evaluations)>>
-         : std::integral_constant<bool, K::reuse_evaluations> {};
-
       /// Value type of a problem state: double for ProblemState (one point);
       /// a pack state declares value_type.
       template<class PS, class = void>
@@ -345,7 +338,7 @@ namespace ecmech {
             * @see EvptnLatticeRotationProblem::stateFromX() for quaternion extraction
             */
             __ecmech_hdev__
-            inline ECMECH_TRIAL_FN_3
+            inline
             void stateFromX(R* const elast_dev_press_vec,
                             R* const quat,
                             const R* const x) {
@@ -435,7 +428,7 @@ namespace ecmech {
             * @see SNLS solver documentation for interface requirements
             */
             __ecmech_hdev__
-            inline ECMECH_TRIAL_FN_2
+            inline
             bool computeRJ(R* const resid,
                            R* const Jacobian,
                            const R* const x) {
@@ -501,7 +494,7 @@ namespace ecmech {
                // most recent kinetics results are kept and reused when x is
                // bitwise identical. Any other x (e.g. a rejected trial point)
                // recomputes them.
-               bool reuse = m_kin_reuse_on && m_kin_reuse_valid;
+               bool reuse = m_kin_reuse_valid;
                for (int iX = 0; reuse && iX < nDimSys; ++iX) {
                   reuse = all(x[iX] == m_kin_reuse_x[iX]);
                }
@@ -512,16 +505,13 @@ namespace ecmech {
                }
                else {
                   get_slip_rate_terms(dgdot_dtau, plastic_def_rate_d5, plastic_spin_vec, kirchoff, m_kin_vals, m_slipGeom, m_kinetics,
-                                      m_kin_reuse_on ? m_kin_reuse_gdot : nullptr, m_kin_reuse_on ? m_kin_reuse_rss : nullptr
-                                      );
-                  if constexpr (m_kin_reuse_on) {
-                     for (int iX = 0; iX < nDimSys; ++iX) { m_kin_reuse_x[iX] = x[iX]; }
-                     for (int i = 0; i < ecmech::ntvec; ++i) { m_kin_reuse_elast_d5[i] = elast_d5_f[i]; }
-                     for (int i = 0; i < SlipGeom::nslip; ++i) { m_kin_reuse_dgdot_dtau[i] = dgdot_dtau[i]; }
-                     for (int i = 0; i < ecmech::ntvec; ++i) { m_kin_reuse_plastic_def_rate_d5[i] = plastic_def_rate_d5[i]; }
-                     for (int i = 0; i < ecmech::nwvec; ++i) { m_kin_reuse_plastic_spin_vec[i] = plastic_spin_vec[i]; }
-                     m_kin_reuse_valid = true;
-                  }
+                                      m_kin_reuse_gdot, m_kin_reuse_rss);
+                  for (int iX = 0; iX < nDimSys; ++iX) { m_kin_reuse_x[iX] = x[iX]; }
+                  for (int i = 0; i < ecmech::ntvec; ++i) { m_kin_reuse_elast_d5[i] = elast_d5_f[i]; }
+                  for (int i = 0; i < SlipGeom::nslip; ++i) { m_kin_reuse_dgdot_dtau[i] = dgdot_dtau[i]; }
+                  for (int i = 0; i < ecmech::ntvec; ++i) { m_kin_reuse_plastic_def_rate_d5[i] = plastic_def_rate_d5[i]; }
+                  for (int i = 0; i < ecmech::nwvec; ++i) { m_kin_reuse_plastic_spin_vec[i] = plastic_spin_vec[i]; }
+                  m_kin_reuse_valid = true;
                }
 
                // Higher-order terms related to the elasticity stuff that's used in the residuals and jacobian calculation
@@ -664,7 +654,7 @@ namespace ecmech {
             {
                // Reuse the last kinetics evaluation if it was at this elastic
                // strain (the converged state); same values as recomputing.
-               bool reuse = m_kin_reuse_on && m_kin_reuse_valid;
+               bool reuse = m_kin_reuse_valid;
                for (int i = 0; reuse && i < ecmech::ntvec; ++i) {
                   reuse = all(elast_strain[i] == m_kin_reuse_elast_d5[i]);
                }
@@ -718,24 +708,17 @@ namespace ecmech {
             /** @brief Pointer to material tangent stiffness (nullptr if not computing) */
             R* m_mtan_sI;
 
-            // Kinetics results of the most recent computeRJ (see computeRJ).
-            // On unless the kinetics opts out (Kinetics::reuse_evaluations) or
-            // ECMECH_NO_KINETICS_REUSE is defined; when off, nothing is stored and the
-            // arrays shrink to one element.
-#if defined(ECMECH_NO_KINETICS_REUSE)
-            static constexpr bool m_kin_reuse_on = false;
-#else
-            static constexpr bool m_kin_reuse_on = kinetics_reuse_evaluations<Kinetics>::value;
-#endif
+            // Kinetics results of the most recent computeRJ, reused by the
+            // tangent and the postprocessing at the converged state (see computeRJ).
             static constexpr size_t nslip_dynamic = (SlipGeom::dynamic) ? (SlipGeom::nslip + SlipGeom::nSlipExtra) : SlipGeom::nslip;
             bool m_kin_reuse_valid = false;
-            R m_kin_reuse_x[(m_kin_reuse_on && (nDimSys) > 0) ? (nDimSys) : 1];
-            R m_kin_reuse_elast_d5[(m_kin_reuse_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
-            R m_kin_reuse_dgdot_dtau[(m_kin_reuse_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
-            R m_kin_reuse_gdot[(m_kin_reuse_on && (SlipGeom::nslip) > 0) ? (SlipGeom::nslip) : 1];
-            R m_kin_reuse_rss[(m_kin_reuse_on && (nslip_dynamic) > 0) ? (nslip_dynamic) : 1];
-            R m_kin_reuse_plastic_def_rate_d5[(m_kin_reuse_on && (ecmech::ntvec) > 0) ? (ecmech::ntvec) : 1];
-            R m_kin_reuse_plastic_spin_vec[(m_kin_reuse_on && (ecmech::nwvec) > 0) ? (ecmech::nwvec) : 1];
+            R m_kin_reuse_x[nDimSys];
+            R m_kin_reuse_elast_d5[ecmech::ntvec];
+            R m_kin_reuse_dgdot_dtau[(SlipGeom::nslip > 0) ? SlipGeom::nslip : 1];
+            R m_kin_reuse_gdot[(SlipGeom::nslip > 0) ? SlipGeom::nslip : 1];
+            R m_kin_reuse_rss[(nslip_dynamic > 0) ? nslip_dynamic : 1];
+            R m_kin_reuse_plastic_def_rate_d5[ecmech::ntvec];
+            R m_kin_reuse_plastic_spin_vec[ecmech::nwvec];
       }; // class EvptnUpdstProblem
 
 #if defined(ECMECH_EXTRA_SOLVERS)

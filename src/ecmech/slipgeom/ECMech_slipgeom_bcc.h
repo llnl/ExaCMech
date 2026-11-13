@@ -875,7 +875,7 @@ namespace ecmech {
           * the kernel is correct, and the projection itself is still optimized.
           */
          template<class R>
-         __ecmech_hdev__ __ecmech_device_noinline__ ECMECH_TRIAL_FN_7 void NSprojection(R* taua,
+         __ecmech_hdev__ __ecmech_device_noinline__ void NSprojection(R* taua,
                                                   double* P_vec, 
                                                   double* Q_vec, 
                                                   const R* const kirchoff,

@@ -39,9 +39,7 @@
 
 #include "ECMech_matModelBase.h"
 #include "evptn/ECMech_evptnSngl.h"
-#if defined(ECMECH_SIMD_EXPT)
 #include "simd/ECMech_simd_evptn.h"
-#endif
 
 #include "ECMech_unused.h"
 
@@ -632,17 +630,16 @@ namespace ecmech {
                   ECMECH_FAIL(__func__, "not complete");
                }
 
-#if defined(ECMECH_SIMD_EXPT)
                const simd::PackArrays pack_arrays{dt, m_tolerance,
                   def_rate_d6vV, m_strides[istride_def_rate], spin_vecV, m_strides[istride_spin_v],
                   rel_vol_ratiosV, m_strides[istride_vol_ratio], internal_energyV, m_strides[istride_int_eng],
                   cauchy_stress_d6pV, m_strides[istride_stress], histV, m_strides[istride_history],
                   tkelvV, m_strides[istride_tkelv], sddV, m_strides[istride_sdd], mtanSDV, nPassed};
-#endif
-#if defined(ECMECH_SIMD_EXPT)
-               // Experiment: SIMD across points on the CPU/OpenMP backends (ECMECH_SIMD=1)
+               // CPU and OpenMP backends: SIMD across points (packs of n_lanes
+               // points, simd/ECMech_simd_evptn.h) for every model the pack path
+               // supports; the GPU and the other models solve one point per thread.
                if constexpr (simd::simd_supported<SlipGeom, Kinetics, ThermoElastN>::value) {
-                  if (m_accel != ECM_EXEC_STRAT_GPU && simd::simd_enabled()) {
+                  if (m_accel != ECM_EXEC_STRAT_GPU) {
                      simd::getResponseSimd<SlipGeom, Kinetics, ThermoElastN, EosModel>
                         (*m_slipGeom, *m_kinetics, *m_elastN, *m_eosModel, pack_arrays, m_accel == ECM_EXEC_STRAT_OPENMP);
                      if (this->reduceStatus(histV, nPassed)) {
@@ -652,15 +649,7 @@ namespace ecmech {
                      return;
                   }
                }
-#endif
 
-#if defined(ECMECH_GPU_REFILL_EXPT) && defined(__ecmech_gpu_active__)
-               // Experiment: per-point work queue on the GPU (ECMECH_GPU_REFILL=<workers>)
-               if (m_accel == ECM_EXEC_STRAT_GPU && refill_workers() > 0) {
-                  getResponseRefill(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
-               }
-               else
-#endif
                getResponseSolo<ECMECH_GPU_THREADS>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
 
                if (this->reduceStatus(histV, nPassed)) {
@@ -730,9 +719,6 @@ namespace ecmech {
                         &sddV[sdd_stride * i],
                         mtanSDThis,
                         outputLevel
-#if defined(ECMECH_DIAG_TRACE)
-                        , (i == ECMECH_DIAG_TRACE) ? 1 : 0   // diagnostic: trace this point
-#endif
                         );
                   };
                   bool status;
@@ -755,101 +741,6 @@ namespace ecmech {
             }
 
 
-#if defined(ECMECH_GPU_REFILL_EXPT) && defined(__ecmech_gpu_active__)
-            /**
-             * @brief Number of worker threads of the per-point work queue, from
-             * the environment variable ECMECH_GPU_REFILL (read once).
-             * @return the worker count; 0 if unset, which selects getResponseSolo.
-             */
-            __ecmech_host__
-            static int refill_workers()
-            {
-               static const int n = [] {
-                  const char* env = std::getenv("ECMECH_GPU_REFILL");
-                  return env ? std::atoi(env) : 0;
-               }();
-               return n;
-            }
-
-            /**
-             * @brief Experiment: per-point work queue on the GPU.
-             *
-             * refill_workers() worker threads take point indices from an atomic
-             * counter and solve each point with getResponseSngl, so a thread whose
-             * point has converged starts the next point instead of idling until
-             * the slowest point of its warp/wavefront is done. Points are not
-             * reordered; each point's computation is the same as in
-             * getResponseSolo, only the thread computing it differs.
-             * Compiled only with ECMECH_GPU_REFILL_EXPT on a GPU build.
-             * The parameters are those of getResponseECM.
-             */
-            __ecmech_host__
-            void getResponseRefill(const double & dt,
-                                   const double * def_rate_d6vV,
-                                   const double * spin_vecV,
-                                   const double * rel_vol_ratiosV,
-                                   double * internal_energyV,
-                                   double * cauchy_stress_d6pV,
-                                   double * histV,
-                                   double * tkelvV,
-                                   double * sddV,
-                                   double * mtanSDV,
-                                   const int& nPassed) const
-            {
-               const unsigned int def_rate_stride = m_strides[istride_def_rate];
-               const unsigned int spin_v_stride = m_strides[istride_spin_v];
-               const unsigned int vol_ratio_stride = m_strides[istride_vol_ratio];
-               const unsigned int int_eng_stride = m_strides[istride_int_eng];
-               const unsigned int stress_stride = m_strides[istride_stress];
-               const unsigned int history_stride = m_strides[istride_history];
-               const unsigned int tkelv_stride = m_strides[istride_tkelv];
-               const unsigned int sdd_stride = m_strides[istride_sdd];
-
-               const auto slipGeom = m_slipGeom;
-               const auto kinetics = m_kinetics;
-               const auto elastN = m_elastN;
-               const auto eosModel = m_eosModel;
-               const auto tolerance = m_tolerance;
-               const auto outputLevel = m_outputLevel;
-               const int n_workers = (refill_workers() < nPassed) ? refill_workers() : nPassed;
-
-               auto mm = snls::memoryManager::getInstance();
-               auto counter_arr = mm.allocManagedArray<int>(1);
-               int* counter = counter_arr.data(chai::ExecutionSpace::GPU);
-               snls::forall<1>(0, 1, [=] __ecmech_hdev__ (int) { counter[0] = 0; });
-
-               snls::forall<ECMECH_GPU_THREADS>(0, n_workers, [=] __ecmech_hdev__ (int)
-               {
-                  auto slipGeom_tmp = slipGeom;
-                  while (true) {
-                     const int i = RAJA::atomicAdd<RAJA::auto_atomic>(counter, 1);
-                     if (i >= nPassed) { break; }
-                     double *mtanSDThis = (mtanSDV ? &mtanSDV[ecmech::nsvec2 * i] : nullptr);
-                     auto get_response = [&] (const SlipGeom& slip_geom) -> bool {
-                        return getResponseSngl<SlipGeom, Kinetics, ThermoElastN, EosModel>
-                        (slip_geom, *kinetics, *elastN, *eosModel, dt, tolerance,
-                         &def_rate_d6vV[def_rate_stride * i], &spin_vecV[spin_v_stride * i],
-                         &rel_vol_ratiosV[vol_ratio_stride * i], &internal_energyV[int_eng_stride * i],
-                         &cauchy_stress_d6pV[stress_stride * i], &histV[history_stride * i],
-                         tkelvV[tkelv_stride * i], &sddV[sdd_stride * i], mtanSDThis, outputLevel
-#if defined(ECMECH_DIAG_TRACE)
-                         , (i == ECMECH_DIAG_TRACE) ? 1 : 0   // diagnostic: trace this point
-#endif
-                         );
-                     };
-                     bool status;
-                     if constexpr (SlipGeom::dynamic) {
-                        SlipGeom slip_geom = *slipGeom_tmp;
-                        status = get_response(slip_geom);
-                     } else {
-                        status = get_response(*slipGeom_tmp);
-                     }
-                     if (!status) { histV[history_stride * i + iHistA_nFEval] *= -1; }
-                  }
-               });
-               counter_arr.free();
-            }
-#endif
 
             /**
              * @brief Retry constitutive response for failed material points using backup solver.

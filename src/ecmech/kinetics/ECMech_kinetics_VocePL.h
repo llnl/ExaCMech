@@ -65,15 +65,6 @@ namespace ecmech {
       public:
          /** @brief Number of hardening state variables: 1 (a single isotropic CRSS shared by all slip systems). */
          static constexpr int nH = 1;
-         /// Whether EvptnUpdstProblem reuses this kinetics' last evaluation at
-         /// the converged state (see its computeRJ). These kinetics are cheap,
-         /// so on some hardware recomputing them is faster than keeping the
-         /// values; ENABLE_VOCE_KINETICS_REUSE=OFF turns the reuse off.
-#if defined(ECMECH_VOCE_NO_KINETICS_REUSE)
-         static constexpr bool reuse_evaluations = false;
-#else
-         static constexpr bool reuse_evaluations = true;
-#endif
          /** @brief Number of parameters: 3 power-law + 5 Voce hardening + nH initial-state + (1 more if `nonlinear`). */
          static constexpr int nParams = 3 + 5 + nH + (nonlinear ? 1 : 0);
          /** @brief Number of kinetic values precomputed by getVals and reused by evalGdots: 1 (the shared CRSS). */

@@ -169,7 +169,7 @@ namespace evptn {
 
     template<class SlipGeom, class SlipKinetics, class R, class T1, class T2>
     __ecmech_hdev__
-    inline ECMECH_TRIAL_FN_4
+    inline
     void get_slip_rate_terms(R* const dgdot_dtau,
                             R* const plastic_def_rate_d5,
                             R* const plastic_spin_vec,
@@ -278,7 +278,7 @@ namespace evptn {
      */
     template<class SlipGeom, class ThermoElastN, class R, class T1, class T2>
     __ecmech_hdev__
-    inline ECMECH_TRIAL_FN_5
+    inline
     void get_slip_rate_deriv_terms(R* const dDp_hat_delast_strain,
                                     R* const dWp_hat_delast_strain,
                                     const T1* const dgdot_dtau,
@@ -476,7 +476,7 @@ namespace evptn {
      */
     template<class SlipGeom, class SlipKinetics, class Elasticty, class R, class T1, class T2, class T3>
     __ecmech_hdev__
-    inline ECMECH_TRIAL_FN_6
+    inline
     void get_slip_contributions(R& pl_disipation_rate,
                                 R& effective_shear_rate,
                                 R* const gdot,

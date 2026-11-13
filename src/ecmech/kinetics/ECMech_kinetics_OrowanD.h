@@ -253,12 +253,7 @@ namespace ecmech {
    /// and convex, so the Newton step is taken whenever it stays inside the
    /// bracket (NewtonBBStep::newtonFirst): the same results as the classic
    /// safeguarded iteration here, with less work per iteration in lockstep.
-   /// -DECMECH_ORO_SAFEGUARDED_NEWTONBB selects the classic iteration (testing).
-#ifdef ECMECH_ORO_SAFEGUARDED_NEWTONBB
-   constexpr snls::NewtonBBStep orowan_mobile_step = snls::NewtonBBStep::safeguarded;
-#else
    constexpr snls::NewtonBBStep orowan_mobile_step = snls::NewtonBBStep::newtonFirst;
-#endif
 
    /// g_i and dg_i/dyM_i for NewtonBB (R: one point, double, or a pack of points)
    template<class R>
@@ -307,59 +302,33 @@ namespace ecmech {
    /// (R = double) or of a pack of points. y_m_guess is the initial guess,
    /// moved into the bracket.
    ///
-   /// Returns y_m and q_m by value: on the GPU, returning q_m through a
-   /// reference to the caller's local from a device (noinline) call gave wrong
-   /// results in the non-Schmid Orowan kernel (CUDA 12.9, sm_61; bcc_e), while
-   /// the same code was right on the CPU and in the other kernels.
+   /// Returns y_m and q_m by value: returning q_m through a reference to the
+   /// caller's local from an out-of-line device call gave wrong results in the
+   /// non-Schmid Orowan kernel with one GPU compiler, while the same code was
+   /// right on the CPU and in the other kernels.
    ///
-   /// Force-inlined on the host: with the newtonFirst iteration gcc otherwise
-   /// keeps it out of line, which cost the pack path ~4%.
+   /// Force-inlined: with the newtonFirst iteration gcc otherwise keeps it out
+   /// of line, which slows the pack path.
    template<class R>
    __ecmech_hdev__
-#if (defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)) && defined(ECMECH_ORO_DEVICE_NOINLINE)
-   // test option: a device call. Inlined (the default) the Orowan kernels,
-   // which are at the register limit, spill about 2.6-4.4 KB per thread
-   // (sm_61) that the call avoids; on a GTX 1070 the call was 0-2% faster.
-   __noinline__
-#elif defined(ECMECH_TRIAL_FN_MASK) && (defined(__HIP_DEVICE_COMPILE__) || defined(ECMECH_TRIAL_FN_HOST)) && (((ECMECH_TRIAL_FN_MASK) >> 12) & 1)
-   ECMECH_TRIAL_FN_12   // trial switch (bit 12): in place of the force-inline
-#else
    SNLS_VT_INLINE
-#endif
    OrowanMobileSolution<R> solve_orowan_mobile(const R& y_m_o, const R& dt_nu, const R& q_dmult_dtrap, double c_ann_d_ann, const R& y_m_guess)
    {
-#ifdef ECMECH_ORO_LANE_NEWTONBB
-      if constexpr (!snls::is_scalar_value<R>()) {
-         // test option: a pack calls the one-point solve once per lane
-         // (measured no faster than the pack solve below on AVX2)
-         OrowanMobileSolution<R> sol;
-         for (int l = 0; l < snls::lanes_of<R>(); ++l) {
-            const OrowanMobileSolution<double> s1 = solve_orowan_mobile<double>(lane(y_m_o, l), lane(dt_nu, l), lane(q_dmult_dtrap, l),
-                                                                   c_ann_d_ann, lane(y_m_guess, l));
-            set_lane(sol.y_m, l, s1.y_m);
-            set_lane(sol.q_m, l, s1.q_m);
-         }
-         return sol;
-      }
-      else
-#endif
-      {
-         OrowanMobileFJ<R> fj{y_m_o, dt_nu, q_dmult_dtrap, c_ann_d_ann};
-         // the bracket [yM_l, yM_h] and g_i(yM_h) = Δt v_i c_ann d_ann e^(yM_h)
-         const R y_m_h = y_m_o + dt_nu * q_dmult_dtrap;
-         const R g_h = dt_nu * c_ann_d_ann * exp(y_m_h);
-         const R y_m_l = y_m_h - g_h;
-         snls::NewtonBB<OrowanMobileFJ<R>, R, orowan_mobile_step> solver(fj, false);
-         // one absolute tolerance on g for every point (y_m is a log density of
-         // order 10-30; its rounding error is a few 1e-15), so a pack of points
-         // gives each point the one-point result
-         solver.setupSolver(100, 1e-14);
-         R y_m = fmin(fmax(y_m_guess, y_m_l), y_m_h);   // initial guess, inside the bracket
-         // g_i(yM_h) >= 0 is known and g_i(yM_l) <= 0 by sign only: pass them
-         // instead of evaluating g at the ends
-         solver.solve(y_m, y_m_l, y_m_h, R(-1e300), g_h);
-         return OrowanMobileSolution<R>{y_m, mobile_q_m(fj, y_m)};
-      }
+      OrowanMobileFJ<R> fj{y_m_o, dt_nu, q_dmult_dtrap, c_ann_d_ann};
+      // the bracket [yM_l, yM_h] and g_i(yM_h) = Δt v_i c_ann d_ann e^(yM_h)
+      const R y_m_h = y_m_o + dt_nu * q_dmult_dtrap;
+      const R g_h = dt_nu * c_ann_d_ann * exp(y_m_h);
+      const R y_m_l = y_m_h - g_h;
+      snls::NewtonBB<OrowanMobileFJ<R>, R, orowan_mobile_step> solver(fj, false);
+      // one absolute tolerance on g for every point (y_m is a log density of
+      // order 10-30; its rounding error is a few 1e-15), so a pack of points
+      // gives each point the one-point result
+      solver.setupSolver(100, 1e-14);
+      R y_m = fmin(fmax(y_m_guess, y_m_l), y_m_h);   // initial guess, inside the bracket
+      // g_i(yM_h) >= 0 is known and g_i(yM_l) <= 0 by sign only: pass them
+      // instead of evaluating g at the ends
+      solver.solve(y_m, y_m_l, y_m_h, R(-1e300), g_h);
+      return OrowanMobileSolution<R>{y_m, mobile_q_m(fj, y_m)};
    }
 
    /**
@@ -415,7 +384,7 @@ namespace ecmech {
          }
 
          __ecmech_hdev__
-         inline ECMECH_TRIAL_FN_8
+         inline
          bool computeRJ(R* const resid,
                         R* const Jacobian,
                         const R* const x) {
@@ -452,7 +421,7 @@ namespace ecmech {
    /// in lockstep by SNLSTrDlDenseG) returns the points that converged.
    template<class Kinetics, class R = double>
    __ecmech_hdev__
-   inline ECMECH_TRIAL_FN_9
+   inline
    auto updateHOrowanReduced(const Kinetics* const kinetics,
                              R* const hs_n,
                              const R* const hs_o,
@@ -1270,9 +1239,8 @@ namespace ecmech {
           * and the result is exponentiated back. In that case the update is solved in
           * the total densities only (#updateHOrowanReduced, an nslip x nslip SNLS
           * solve; the mobile densities are solved per slip system inside each
-          * evaluation, see #reduced_hardening), unless ECMECH_OROWAN_FULL_HSOLVE is
-          * defined, which keeps the coupled 2*nslip x 2*nslip solve (#updateHN).
-          * Otherwise (not `LOGFORM`) the coupled #updateHN solve is used, and the raw
+          * evaluation, see #reduced_hardening).
+          * Otherwise (not `LOGFORM`) the coupled 2*nslip x 2*nslip #updateHN solve is used, and the raw
           * (non-log) solve has
           * no such guarantee, so the result is checked for negative densities; if any
           * are found, the step is retried by substepping: `dt` is split into 10 equal
@@ -1353,7 +1321,6 @@ namespace ecmech {
             double nu[SlipGeom::nslip];
             hardening_inputs(ihs_o, nu, hs_o, gdot);
 
-#if !defined(ECMECH_OROWAN_FULL_HSOLVE)
             int nFEvals;
             if constexpr (LOGFORM) {
                // nslip x nslip solve in the total densities (see reduced_hardening)
@@ -1364,11 +1331,6 @@ namespace ecmech {
                                                    &hs_u[0], &ihs_o[0], dt, nu, hvals, tkelv,
                                                    outputLevel);
             }
-#else
-            int nFEvals = updateHN<KineticsOrowanD>(this,
-                                                   &hs_u[0], &ihs_o[0], dt, nu, hvals, tkelv,
-                                                   outputLevel);
-#endif
             if (LOGFORM) {
                for (int i = 0; i < nslip * 2; i++) {
                   hs_u[i] = exp(hs_u[i]);
@@ -1477,7 +1439,7 @@ namespace ecmech {
           */
          template<class R>
          __ecmech_hdev__
-         inline ECMECH_TRIAL_FN_10
+         inline
          void
          reduced_hardening(const R* const y_t,
                           const R* const y_m_o,
@@ -1560,8 +1522,7 @@ namespace ecmech {
           * @brief Evaluate the mobile/total dislocation-density evolution rates
           * (multiplication, trapping, annihilation) and their Jacobian, in log space if
           * `LOGFORM`, for the coupled vector-hardness SNLS solve (#updateHN, used for
-          * the non-log form or with ECMECH_OROWAN_FULL_HSOLVE; the log form normally
-          * uses #reduced_hardening instead) -- see the
+          * the non-log form; the log form uses #reduced_hardening instead) -- see the
           * "Hardening law" equations and symbol table in the file-level documentation
           * in ECMech_kinetics_OrowanD.h.
           *

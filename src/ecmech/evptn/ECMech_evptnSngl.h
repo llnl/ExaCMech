@@ -156,7 +156,7 @@ namespace evptn {
  */
 template<class SlipGeom, class Kinetics, class EosModel, class ThermoElastN, class ProbState, bool RStarSolve=false, bool SkipHardening=false>
 __ecmech_hdev__
-inline ECMECH_TRIAL_FN_1
+inline
 bool preprocess(const SlipGeom& slipGeom,
                 const Kinetics& kinetics,
                 const EosModel& eos,
@@ -582,7 +582,7 @@ void postprocess_prob(Problem& prob,
  */
 template<class ProblemState, class ThermoElastN>
 __ecmech_hdev__
-inline ECMECH_TRIAL_FN_11
+inline
 void postprocess(ProblemState& prob_state,
                  const ThermoElastN& elastN,
                  const double* const def_rate_d6v_sample,
