@@ -868,9 +868,14 @@ namespace ecmech {
           * @param[in] kirchoff Kirchhoff stress (deviatoric 5-vector)
           * @param[in] fill_PQ Whether to fill P_vec and Q_vec arrays
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
+          *
+          * A call, not inlined, in GPU device code (#__ecmech_device_noinline__): inlined
+          * into the very large, fully inlined getResponse kernel of the non-Schmid
+          * models, it led a GPU compiler to wrong results at -O2 and above. As a call
+          * the kernel is correct, and the projection itself is still optimized.
           */
          template<class R>
-         __ecmech_hdev__ inline ECMECH_TRIAL_FN_7 void NSprojection(R* taua,
+         __ecmech_hdev__ __ecmech_device_noinline__ ECMECH_TRIAL_FN_7 void NSprojection(R* taua,
                                                   double* P_vec, 
                                                   double* Q_vec, 
                                                   const R* const kirchoff,

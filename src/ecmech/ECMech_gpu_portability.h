@@ -95,6 +95,19 @@
 #define __ecmech_host_only__
 #endif
 
+/**
+ * @def __ecmech_device_noinline__
+ * @brief Keeps a function out of line in device (GPU) code only; it is still
+ * optimized, and inlined as usual on the host. Use it where inlining a function
+ * into a very large GPU kernel leads the device compiler to wrong code (see
+ * SlipGeomBCCNonSchmid::NSprojection).
+ */
+#if defined(__ecmech_device_only__)
+#define __ecmech_device_noinline__ __noinline__
+#else
+#define __ecmech_device_noinline__
+#endif
+
 // Trial switches (MI300A bcc_e investigation, kit BCC_E_TRIALS.md): with
 // -DECMECH_TRIAL_FN_MASK=<bits>, bit k gives function ECMECH_TRIAL_FN_k (the list in that
 // document) device attributes, in the device pass only (HIP). ECMECH_TRIAL_FN_MODE=1:
