@@ -1421,7 +1421,7 @@ namespace ecmech {
           *                        - delta_ij Δt sdotT_i
           * (the last term from the 1/qT_i). This equals the Schur complement of
           * the full 2 nslip x 2 nslip Jacobian on its total-density block, whose
-          * mobile-mobile block is diagonal (see the performance summary, 5.1).
+          * mobile-mobile block is diagonal (see OrowanReducedHProblem).
           *
           * @param[in]  y_t        yT, log total densities (nslip)
           * @param[in]  y_m_o      yM^o, log mobile densities at the start of the step

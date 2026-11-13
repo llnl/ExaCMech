@@ -43,6 +43,16 @@ Dependencies:
   - A RAJA for the miniapp on a CORAL architecture was built with the following commands `cmake ../ -DCMAKE_INSTALL_PREFIX=../install_dir/ -DENABLE_OPENMP=ON -DENABLE_CUDA=ON -DRAJA_TIMER=chrono -DCUDA_ARCH=sm_70`
   - specify with `-DRAJA_DIR=.../share/raja/cmake`
 
+Build options specific to ExaCMech's performance paths:
+* `-DECMECH_SIMD_LANES=N` (default 4): material points per pack on the CPU SIMD path
+* `-DECMECH_GPU_THREADS=N` (default 256): threads per block of the GPU kernels
+* SNLS's `-DENABLE_PACK_VECTOR_MATH=ON` (off by default, set when building SNLS): vector math library for the CPU SIMD path's `exp`/`log`/`pow`
+
+CPU SIMD PATH
+======
+
+On the CPU and OpenMP backends, ExaCMech solves several material points in lockstep: the point-wise numerics are templated on a value type, and a "pack" of `ECMECH_SIMD_LANES` points (SNLS's `snls::simd::pack`) is processed with SIMD instructions. This path is always on for the models that support it; the GPU solves one point per thread. See [DeveloperGuide.md](DeveloperGuide.md) for how it works and [SIMDGuide.md](SIMDGuide.md) for how to write code for it.
+
 TESTING
 ======
 
