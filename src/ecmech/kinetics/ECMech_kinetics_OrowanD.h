@@ -321,6 +321,8 @@ namespace ecmech {
    // which are at the register limit, spill about 2.6-4.4 KB per thread
    // (sm_61) that the call avoids; on a GTX 1070 the call was 0-2% faster.
    __noinline__
+#elif defined(ECMECH_TRIAL_FN_MASK) && (defined(__HIP_DEVICE_COMPILE__) || defined(ECMECH_TRIAL_FN_HOST)) && (((ECMECH_TRIAL_FN_MASK) >> 12) & 1)
+   ECMECH_TRIAL_FN_12   // trial switch (bit 12): in place of the force-inline
 #else
    SNLS_VT_INLINE
 #endif
@@ -413,7 +415,7 @@ namespace ecmech {
          }
 
          __ecmech_hdev__
-         inline
+         inline ECMECH_TRIAL_FN_8
          bool computeRJ(R* const resid,
                         R* const Jacobian,
                         const R* const x) {
@@ -450,7 +452,7 @@ namespace ecmech {
    /// in lockstep by SNLSTrDlDenseG) returns the points that converged.
    template<class Kinetics, class R = double>
    __ecmech_hdev__
-   inline
+   inline ECMECH_TRIAL_FN_9
    auto updateHOrowanReduced(const Kinetics* const kinetics,
                              R* const hs_n,
                              const R* const hs_o,
@@ -1475,7 +1477,7 @@ namespace ecmech {
           */
          template<class R>
          __ecmech_hdev__
-         inline
+         inline ECMECH_TRIAL_FN_10
          void
          reduced_hardening(const R* const y_t,
                           const R* const y_m_o,

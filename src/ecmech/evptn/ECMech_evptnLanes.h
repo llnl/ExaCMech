@@ -276,7 +276,7 @@ __ecmech_hdev__ inline PointStates<ProblemStatePoint, single_point, n_lanes> mak
  */
 template<class R, class SlipGeom, class Kinetics, class ThermoElastN, class EosModel>
 __ecmech_hdev__
-inline mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const Kinetics& kinetics,
+inline ECMECH_TRIAL_FN_0 mask_t<R> getResponseLanes(const int ip, const SlipGeom& slipGeom, const Kinetics& kinetics,
                                   const ThermoElastN& elastN, const EosModel& eos, const PackArrays& a,
                                   int* const fevals_out = nullptr)
 {

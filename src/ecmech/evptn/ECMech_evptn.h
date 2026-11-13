@@ -345,7 +345,7 @@ namespace ecmech {
             * @see EvptnLatticeRotationProblem::stateFromX() for quaternion extraction
             */
             __ecmech_hdev__
-            inline
+            inline ECMECH_TRIAL_FN_3
             void stateFromX(R* const elast_dev_press_vec,
                             R* const quat,
                             const R* const x) {
@@ -435,7 +435,7 @@ namespace ecmech {
             * @see SNLS solver documentation for interface requirements
             */
             __ecmech_hdev__
-            inline
+            inline ECMECH_TRIAL_FN_2
             bool computeRJ(R* const resid,
                            R* const Jacobian,
                            const R* const x) {

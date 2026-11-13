@@ -870,7 +870,7 @@ namespace ecmech {
           * @tparam R value type: double (one point) or a pack of points (ECMech_value_type.h)
           */
          template<class R>
-         __ecmech_hdev__ inline void NSprojection(R* taua,
+         __ecmech_hdev__ inline ECMECH_TRIAL_FN_7 void NSprojection(R* taua,
                                                   double* P_vec, 
                                                   double* Q_vec, 
                                                   const R* const kirchoff,
