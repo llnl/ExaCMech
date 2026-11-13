@@ -30,7 +30,7 @@ struct simd_supported {
 /**
  * @brief CPU/OpenMP SIMD path: getResponse for a.nPassed points, n_lanes at a
  * time, with evptn::getResponseLanes on PackDouble. Points that fail to
- * converge are marked as getResponseSolo marks them (hist[iHistA_nFEval] *= -1).
+ * converge are marked as getResponsePerPoint marks them (hist[iHistA_nFEval] *= -1).
  *
  * @tparam SlipGeom, Kinetics, ThermoElastN, EosModel the model's classes
  * @param[in] slipGeom, kinetics, elastN, eos the model
@@ -49,7 +49,7 @@ void getResponseSimd(const SlipGeom& slipGeom, const Kinetics& kinetics, const T
       const auto converged = evptn::getResponseLanes<PackDouble>(ip, slipGeom, kinetics, elastN, eos, a);
       for (int l = 0; l < n_lanes; ++l) {
          const int i = ip * n_lanes + l;
-         if (i < a.nPassed && !mask_lane(converged, l)) { a.histV[a.history_stride * i + evptn::iHistA_nFEval] *= -1; } // as getResponseSolo marks a failure
+         if (i < a.nPassed && !mask_lane(converged, l)) { a.histV[a.history_stride * i + evptn::iHistA_nFEval] *= -1; } // as getResponsePerPoint marks a failure
       }
    };
    // the packs in parallel through RAJA (no OpenMP in this file: builds without

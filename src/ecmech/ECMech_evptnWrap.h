@@ -650,7 +650,7 @@ namespace ecmech {
                   }
                }
 
-               getResponseSolo<ECMECH_GPU_THREADS>(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
+               getResponsePerPoint(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV, cauchy_stress_d6pV, histV, tkelvV, sddV, mtanSDV, nPassed);
 
                if (this->reduceStatus(histV, nPassed)) {
                   getResponseRetry(dt, def_rate_d6vV, spin_vecV, rel_vol_ratiosV, internal_energyV,
@@ -661,16 +661,14 @@ namespace ecmech {
 
 
             /**
-             * @brief One thread per material point: the original getResponse
-             * kernel, getResponseSngl per point, launched with snls::forall.
-             *
-             * @tparam BLOCK GPU block size (threads per block) of the launch;
-             * ECMECH_GPU_THREADS by default.
+             * @brief getResponseSngl for each material point, one point per GPU
+             * thread (or per loop iteration on the CPU and OpenMP backends),
+             * launched with snls::forall in blocks of ECMECH_GPU_THREADS. Used on
+             * the GPU, and on the CPU for models the SIMD path does not support.
              * The parameters are those of getResponseECM.
              */
-            template<int BLOCK>
             __ecmech_host__
-            void getResponseSolo(const double & dt,
+            void getResponsePerPoint(const double & dt,
                                  const double * def_rate_d6vV,
                                  const double * spin_vecV,
                                  const double * rel_vol_ratiosV,
@@ -699,7 +697,7 @@ namespace ecmech {
                const auto tolerance = m_tolerance;
                const auto outputLevel = m_outputLevel;
 
-               snls::forall<BLOCK>(0, nPassed, [=]
+               snls::forall<ECMECH_GPU_THREADS>(0, nPassed, [=]
                   __ecmech_hdev__
                   (int i)
                {
