@@ -698,7 +698,7 @@ namespace evptn {
      *      elastic coupling, e.g. hexagonal symmetry)
      * 2. **Solve linear system**: J · [dε_e/dD; dω/dD] = -[dR/dD; ...]
      *    - Uses SNLS_LUP_SolveX for multiple RHS (nsvec = 6 columns)
-     *    - Jacobian already factored during nonlinear solve
+     *    - Factors a local copy of the Jacobian (LU with partial pivoting)
      * 3. **Apply elastic stiffness**: temp = C · (dε_e/dD)
      *    - Via ThermoElastN::multCauchyDif
      *    - Produces 6×6 intermediate result including the pressure row and the
@@ -728,7 +728,7 @@ namespace evptn {
      * 
      * @param[in] jacobian Converged Jacobian matrix from implicit solve [JAC_SIZE × JAC_SIZE]
      *                     Must be the Jacobian at the converged solution
-     *                     Will be used for linear solve (non-const for LU factorization)
+     *                     Not modified: the LU factorization works on a local copy
      * 
      * @param[in] dquat_domega_t Transposed quaternion derivative [nwvec × qdim = 3×4]
      *                           ∂Q/∂ω evaluated at converged rotation
@@ -882,8 +882,19 @@ namespace evptn {
             // dRhard_ddef_rate but typically we can but for most problems safe to treat that
             // set of terms as being = 0
         }
-        // Now solve for our dstrain_ddefrate and domega_ddefrate terms
-        const auto lu_ok = ::SNLS_LUP_SolveXV<JAC_SIZE>(const_cast<R*>(jacobian), dstrainomega_ddef_rate_t, nRHS);
+        // Now solve for our dstrain_ddefrate and domega_ddefrate terms.
+        // The LU factors a local copy: jacobian is const for the caller.
+        // Factoring the caller's array in place through a const_cast gave a
+        // wrong factorization in CUDA (nvcc 12.9) device code for the HCP model
+        // (a pivot reported below tolerance on a well-conditioned Jacobian, so
+        // the tangent was built from unsolved right-hand sides) while the host
+        // build was correct. The root cause in the compiler was not isolated;
+        // keep the copy.
+        R jacobian_lu[ JAC_SIZE * JAC_SIZE ];
+        for (size_t iJ = 0; iJ < JAC_SIZE * JAC_SIZE; ++iJ) {
+            jacobian_lu[iJ] = jacobian[iJ];
+        }
+        const auto lu_ok = ::SNLS_LUP_SolveXV<JAC_SIZE>(jacobian_lu, dstrainomega_ddef_rate_t, nRHS);
         if (!all(lu_ok)) {
             ECMECH_FAIL(__func__, "error from SNLS_LUP_SolveXV");
         }
